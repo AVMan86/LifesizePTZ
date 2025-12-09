@@ -187,17 +187,17 @@ class VISCAParser:
             cmd.valid = True
 
             # Map zoom direction to IR command
-            if cmd.zoom_direction == 0x02:  # Tele (zoom in)
+            if cmd.zoom_direction == 0x00:  # Stop
+                cmd.ir_commands = []
+            elif cmd.zoom_direction == 0x02:  # Tele (zoom in)
                 cmd.ir_commands = [IRCommand.ZOOM_IN]
             elif cmd.zoom_direction == 0x03:  # Wide (zoom out)
                 cmd.ir_commands = [IRCommand.ZOOM_OUT]
-            elif cmd.zoom_direction == 0x00:  # Stop
-                cmd.ir_commands = []
-            elif cmd.zoom_direction & 0x20:  # Variable speed tele: 2p
+            elif (cmd.zoom_direction & 0xF0) == 0x20:  # Variable speed tele: 2p
                 cmd.zoom_speed = cmd.zoom_direction & 0x0F
                 cmd.zoom_direction = 0x02
                 cmd.ir_commands = [IRCommand.ZOOM_IN]
-            elif cmd.zoom_direction & 0x30:  # Variable speed wide: 3p
+            elif (cmd.zoom_direction & 0xF0) == 0x30:  # Variable speed wide: 3p
                 cmd.zoom_speed = cmd.zoom_direction & 0x0F
                 cmd.zoom_direction = 0x03
                 cmd.ir_commands = [IRCommand.ZOOM_OUT]

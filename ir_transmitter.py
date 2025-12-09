@@ -1,19 +1,19 @@
 """
 PIO-based IR Transmitter for LifeSize Camera
 
-Uses two PIO state machines:
-- SM0: Generates 38kHz carrier signal (26.3us period, 33% duty)
-- SM1: Controls mark/space timing with microsecond precision
+Uses a single PIO state machine to generate 38kHz carrier with
+mark/space timing control. The PIO program rapidly toggles the
+output pin during mark periods to create the carrier, and holds
+low during space periods.
 
-The carrier SM runs continuously when enabled, and the timing SM
-gates the carrier on/off to create the modulated IR signal.
+Clock divider is calculated to achieve accurate 38kHz carrier
+frequency with ~33% duty cycle.
 """
 
 import rp2
 from rp2 import PIO, StateMachine, asm_pio
 from machine import Pin
 import time
-import array
 
 from config import (
     PIN_IR_LED,
@@ -21,83 +21,14 @@ from config import (
     IR_CARRIER_DUTY_CYCLE,
     DEBUG_IR,
     DEBUG_TIMING,
+    IRCommand,
 )
-from ir_protocol import protocol, IRCommand
+from ir_protocol import protocol
 
 
 # =============================================================================
 # PIO Programs
 # =============================================================================
-
-@asm_pio(set_init=PIO.OUT_LOW, sideset_init=PIO.OUT_LOW)
-def ir_carrier():
-    """
-    PIO program for 38kHz carrier generation with gating.
-
-    The carrier runs when the input pin (from timing SM) is high.
-    Uses sideset for the actual IR output to achieve precise timing.
-
-    At 125MHz system clock:
-    - 38kHz = 3289 cycles per period
-    - 33% duty = ~1096 cycles high, ~2193 cycles low
-
-    We use autopull to read the timing values from FIFO.
-    """
-    # Wait for enable signal (pull from FIFO or wait on pin)
-    wrap_target()
-
-    # Pull timing value (number of carrier cycles for this burst)
-    pull(block)                 # Get burst length from FIFO
-    mov(x, osr)                 # Move to X for counting
-
-    # Generate carrier bursts
-    label("burst_loop")
-    set(pins, 1)        .side(1)  [10]   # IR LED on (adjust delay for duty)
-    nop()                       [10]
-    nop()                       [10]
-    set(pins, 0)        .side(0)  [20]   # IR LED off
-    nop()                       [20]
-    nop()                       [20]
-    jmp(x_dec, "burst_loop")    [5]      # Continue burst
-
-    wrap()
-
-
-@asm_pio(out_init=PIO.OUT_LOW, set_init=PIO.OUT_LOW)
-def ir_modulator():
-    """
-    Simplified PIO program that directly modulates IR output.
-
-    Reads mark/space timing values from FIFO:
-    - Mark: Output carrier signal for specified duration
-    - Space: Output low for specified duration
-
-    Each FIFO entry contains delay cycles (prescaled externally).
-    Even entries = mark duration, odd entries = space duration.
-    """
-    wrap_target()
-
-    # Get mark duration
-    pull(block)
-    mov(x, osr)
-
-    # Mark period - toggle rapidly to create carrier
-    label("mark_loop")
-    set(pins, 1)                [7]     # High for ~8 cycles
-    set(pins, 0)                [15]    # Low for ~16 cycles (33% duty)
-    jmp(x_dec, "mark_loop")
-
-    # Get space duration
-    pull(block)
-    mov(x, osr)
-
-    # Space period - just wait with output low
-    label("space_loop")
-    nop()                       [23]    # Delay loop (~24 cycles)
-    jmp(x_dec, "space_loop")
-
-    wrap()
-
 
 @asm_pio(set_init=PIO.OUT_LOW)
 def ir_simple():
@@ -125,9 +56,9 @@ def ir_simple():
 
     # Generate carrier for mark duration
     label("carrier_loop")
-    set(pins, 1)                [12]    # ~13 cycles high
-    set(pins, 0)                [12]    # ~13 cycles low (total ~26 for carrier)
-    jmp(x_dec, "carrier_loop")
+    set(pins, 1)                [12]    # 13 cycles high
+    set(pins, 0)                [12]    # 13 cycles low
+    jmp(x_dec, "carrier_loop")          # 1 cycle (total 27 per carrier cycle)
 
     label("do_space")
     # Pull space duration
@@ -139,8 +70,8 @@ def ir_simple():
 
     # Delay for space (output stays low)
     label("space_delay")
-    nop()                       [24]    # ~25 cycles per iteration
-    jmp(x_dec, "space_delay")
+    nop()                       [24]    # 25 cycles
+    jmp(x_dec, "space_delay")           # 1 cycle (total 26 per iteration)
 
     label("done_space")
     wrap()
@@ -174,26 +105,31 @@ class IRTransmitter:
         self.is_transmitting = False
 
         # Calculate timing constants
-        # System clock is 125MHz on Pico 2W
+        # System clock is 125MHz on Pico 2W (150MHz on RP2350, but MicroPython defaults to 125)
         self.sys_clock = 125_000_000
 
-        # For simple carrier generation at ~38kHz
-        # Each carrier cycle = ~26us = ~3250 system cycles
-        # Using divider of 1, we count carrier periods
+        # PIO carrier loop timing:
+        # - set(pins, 1) [12] = 13 cycles high
+        # - set(pins, 0) [12] = 13 cycles low
+        # - jmp = 1 cycle
+        # Total = 27 PIO cycles per carrier period
+        self.carrier_loop_cycles = 27
 
-        # Carrier period in system cycles (for 38kHz)
-        self.carrier_period_cycles = self.sys_clock // IR_CARRIER_FREQ_HZ
+        # PIO space loop timing:
+        # - nop [24] = 25 cycles
+        # - jmp = 1 cycle
+        # Total = 26 PIO cycles per space iteration
+        self.space_loop_cycles = 26
 
-        # We use ~26 cycles per carrier half-cycle in PIO (13 high + 13 low)
-        # So actual carrier frequency = 125MHz / 26 = ~4.8MHz toggle rate
-        # Which gives ~2.4MHz square wave - too fast!
+        # Calculate clock divider for 38kHz carrier
+        # PIO clock = carrier_freq * cycles_per_carrier_period
+        # Divider = sys_clock / PIO_clock
+        self.pio_divider = self.sys_clock / (IR_CARRIER_FREQ_HZ * self.carrier_loop_cycles)
 
-        # Need to use clock divider. For 38kHz with 26-cycle loop:
-        # divider = 125MHz / (38kHz * 26) = 125000000 / 988000 = ~126.5
-        self.pio_divider = self.sys_clock / (IR_CARRIER_FREQ_HZ * 26)
-
-        # Cycles per microsecond at the divided clock rate
-        self.cycles_per_us = (self.sys_clock / self.pio_divider) / 1_000_000
+        # Calculate microseconds per loop iteration at the PIO clock rate
+        pio_clock = self.sys_clock / self.pio_divider
+        self.us_per_carrier_cycle = (self.carrier_loop_cycles / pio_clock) * 1_000_000
+        self.us_per_space_cycle = (self.space_loop_cycles / pio_clock) * 1_000_000
 
         self._init_pio()
 
@@ -225,26 +161,24 @@ class IRTransmitter:
 
     def _us_to_cycles(self, microseconds: int) -> int:
         """
-        Convert microseconds to PIO cycle counts.
+        Convert microseconds to carrier cycle counts.
 
-        For the simple carrier generator, we count carrier periods.
-        One carrier period = 26 PIO cycles = 1/38000 seconds = ~26.3us
+        Each carrier cycle takes self.us_per_carrier_cycle microseconds.
+        For 38kHz with 27-cycle loop at 1.026MHz, this is ~26.3us.
         """
-        # Each carrier cycle is ~26.3us, so:
-        carrier_cycles = microseconds / 26.3
+        carrier_cycles = microseconds / self.us_per_carrier_cycle
         return max(1, int(carrier_cycles))
 
     def _us_to_space_cycles(self, microseconds: int) -> int:
         """
-        Convert microseconds to space delay cycles.
+        Convert microseconds to space delay cycle counts.
 
-        Space loop is ~25 cycles per iteration at PIO clock rate.
-        PIO clock = sys_clock / divider = ~987kHz
-        Each iteration = 25/987000 seconds = ~25.3us
+        Each space iteration takes self.us_per_space_cycle microseconds.
+        For 26-cycle loop at 1.026MHz, this is ~25.3us.
         """
         if microseconds == 0:
             return 0
-        space_cycles = microseconds / 25.3
+        space_cycles = microseconds / self.us_per_space_cycle
         return max(1, int(space_cycles))
 
     def transmit_command(self, command_code: int):

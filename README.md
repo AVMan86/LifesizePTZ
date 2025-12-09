@@ -15,13 +15,13 @@ A MicroPython-based bridge that receives standard VISCA-over-IP commands and tra
 | Function | GPIO Pin |
 |----------|----------|
 | IR LED | GP15 |
-| IR Receiver | GP16 |
-| Relay Control | GP20 |
-| SPI SCK | GP18 |
-| SPI MOSI | GP19 |
 | SPI MISO | GP16 |
 | SPI CS | GP17 |
+| SPI SCK | GP18 |
+| SPI MOSI | GP19 |
+| Relay Control | GP20 |
 | W5500 Reset | GP21 |
+| IR Receiver | GP22 |
 
 ## Network Configuration
 

@@ -21,7 +21,7 @@ CONTROLLER_IP = "192.168.5.100"  # Expected controller address
 PIN_IR_LED = 15
 
 # IR receiver for signal verification (optional)
-PIN_IR_RECEIVER = 16
+PIN_IR_RECEIVER = 22
 
 # Relay control for camera power
 PIN_RELAY = 20
