@@ -259,6 +259,25 @@ class VISCABridge:
             self.led.value(self.led_state)
             self.last_blink = now
 
+    def close_socket(self):
+        """Close the UDP socket if open."""
+        if self.socket is not None:
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
+
+    def check_network(self) -> bool:
+        """Check if network is still connected."""
+        if self.nic is None:
+            return False
+        try:
+            # Try to check connection status
+            return self.nic.isconnected()
+        except:
+            return False
+
     def run(self):
         """Main event loop."""
         print("\n" + "=" * 50)
@@ -267,6 +286,8 @@ class VISCABridge:
 
         self.running = True
         recv_buffer = bytearray(256)
+        last_network_check = time.ticks_ms()
+        network_check_interval = 5000  # Check every 5 seconds
 
         while self.running:
             try:
@@ -275,6 +296,20 @@ class VISCABridge:
 
                 # Poll scheduler for IR timing
                 self.scheduler.poll()
+
+                # Periodically check network status
+                now = time.ticks_ms()
+                if time.ticks_diff(now, last_network_check) > network_check_interval:
+                    last_network_check = now
+                    if not self.check_network():
+                        print("Network disconnected, attempting reconnect...")
+                        self.close_socket()
+                        if self.init_network() and self.init_socket():
+                            print("Reconnected successfully!")
+                        else:
+                            print("Reconnect failed, will retry...")
+                            time.sleep_ms(1000)
+                            continue
 
                 # Check for incoming VISCA commands
                 if self.socket is not None:
@@ -462,16 +497,31 @@ def main():
     # Create and initialize bridge
     bridge = VISCABridge()
 
-    # Initialize network
-    if not bridge.init_network():
-        print("\nNetwork initialization failed!")
-        print("Check W5500 connections and try again.")
-        return
+    # Continuously retry network initialization
+    retry_count = 0
+    while True:
+        retry_count += 1
+        print(f"Network initialization attempt {retry_count}...")
 
-    # Initialize socket
-    if not bridge.init_socket():
-        print("\nSocket initialization failed!")
-        return
+        # Initialize network
+        if bridge.init_network():
+            # Initialize socket
+            if bridge.init_socket():
+                print("Network ready!")
+                break
+            else:
+                print("Socket initialization failed, retrying...")
+                bridge.close_socket()
+        else:
+            print("Network initialization failed, retrying...")
+
+        # Blink LED fast to indicate waiting for network
+        for _ in range(10):
+            bridge.led.toggle()
+            time.sleep_ms(200)
+
+        print(f"Waiting 3 seconds before retry...")
+        time.sleep_ms(3000)
 
     # Run main loop
     bridge.run()
