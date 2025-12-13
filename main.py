@@ -285,7 +285,6 @@ class VISCABridge:
         print("=" * 50 + "\n")
 
         self.running = True
-        recv_buffer = bytearray(256)
         last_network_check = time.ticks_ms()
         network_check_interval = 5000  # Check every 5 seconds
 
@@ -314,9 +313,9 @@ class VISCABridge:
                 # Check for incoming VISCA commands
                 if self.socket is not None:
                     try:
-                        nbytes, addr = self.socket.recvfrom_into(recv_buffer)
-                        if nbytes > 0:
-                            self.process_visca(bytes(recv_buffer[:nbytes]), addr)
+                        data, addr = self.socket.recvfrom(256)
+                        if data and len(data) > 0:
+                            self.process_visca(data, addr)
                     except OSError:
                         # No data available (non-blocking)
                         pass
@@ -448,16 +447,14 @@ def echo_visca():
         return
 
     parser = VISCAParser()
-    recv_buffer = bytearray(256)
 
     try:
         while True:
             bridge.blink_led()
 
             try:
-                nbytes, addr = bridge.socket.recvfrom_into(recv_buffer)
-                if nbytes > 0:
-                    data = bytes(recv_buffer[:nbytes])
+                data, addr = bridge.socket.recvfrom(256)
+                if data and len(data) > 0:
                     print(f"\nFrom {addr[0]}:{addr[1]}:")
                     print(f"  Raw: {data.hex()}")
 
