@@ -18,20 +18,20 @@ CONTROLLER_IP = "192.168.5.100"  # Expected controller address
 # GPIO Pin Definitions
 # =============================================================================
 # IR LED output (active high, use NPN transistor driver)
-PIN_IR_LED = 15
+PIN_IR_LED = 16
 
 # IR receiver for signal verification (optional)
-PIN_IR_RECEIVER = 22
+PIN_IR_RECEIVER = 21
 
 # Relay control for camera power
 PIN_RELAY = 20
 
 # W5500 SPI Configuration (SPI0)
-PIN_SPI_SCK = 18   # SPI Clock
-PIN_SPI_MOSI = 19  # SPI MOSI (Master Out Slave In)
-PIN_SPI_MISO = 16  # SPI MISO (Master In Slave Out)
-PIN_SPI_CS = 17    # SPI Chip Select
-PIN_W5500_RST = 21 # W5500 Reset pin
+PIN_SPI_SCK = 2   # SPI Clock
+PIN_SPI_MOSI = 3  # SPI MOSI (Master Out Slave In)
+PIN_SPI_MISO = 4  # SPI MISO (Master In Slave Out)
+PIN_SPI_CS = 5    # SPI Chip Select
+PIN_W5500_RST = 6 # W5500 Reset pin
 
 # Status LED (onboard)
 PIN_LED = "LED"  # Pico 2W onboard LED
