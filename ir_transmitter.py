@@ -328,6 +328,8 @@ class IRTransmitterSoftware:
     def __init__(self, pin_num=PIN_IR_LED):
         self.pin = Pin(pin_num, Pin.OUT, value=0)
         self.carrier_half_period_us = 13  # ~38kHz (26us period)
+        if DEBUG_IR:
+            print(f"IR TX Software: Initialized on GPIO {pin_num}")
 
     def _carrier_burst(self, duration_us: int):
         """Generate a carrier burst for the specified duration."""
@@ -345,6 +347,10 @@ class IRTransmitterSoftware:
 
     def transmit_command(self, command_code: int):
         """Transmit a command using software timing."""
+        if DEBUG_IR:
+            print(f"IR TX: Sending 0x{command_code:02X}")
+
+        start_time = time.ticks_us()
         timings = protocol.encode_command(command_code)
 
         for mark_us, space_us in timings:
@@ -353,6 +359,10 @@ class IRTransmitterSoftware:
                 self._space(space_us)
 
         self.pin.value(0)
+
+        if DEBUG_IR:
+            elapsed = time.ticks_diff(time.ticks_us(), start_time)
+            print(f"IR TX: Frame complete ({elapsed}us)")
 
 
 # =============================================================================
@@ -363,17 +373,25 @@ class IRTransmitterSoftware:
 _transmitter = None
 
 
-def get_transmitter(use_pio: bool = True) -> IRTransmitter:
-    """Get or create the default IR transmitter instance."""
+def get_transmitter(use_pio: bool = False) -> IRTransmitter:
+    """
+    Get or create the default IR transmitter instance.
+
+    Args:
+        use_pio: If True, use PIO-based transmitter (precise but may have issues on RP2350).
+                 If False (default), use software bit-banging (more compatible).
+    """
     global _transmitter
     if _transmitter is None:
         if use_pio:
             try:
                 _transmitter = IRTransmitter()
+                print("IR TX: Using PIO-based transmitter")
             except Exception as e:
                 print(f"PIO init failed, using software: {e}")
                 _transmitter = IRTransmitterSoftware()
         else:
+            print("IR TX: Using software bit-bang transmitter")
             _transmitter = IRTransmitterSoftware()
     return _transmitter
 
