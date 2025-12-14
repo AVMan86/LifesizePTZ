@@ -216,7 +216,12 @@ class VISCABridge:
             self._send_response(VISCAResponse.error(0x02), addr)
             return
 
-        # Send ACK immediately
+        # Handle special commands that need specific responses
+        if cmd.needs_response:
+            self._handle_special_command(cmd, addr)
+            return
+
+        # Send ACK immediately for regular commands
         self._send_response(VISCAResponse.ack(), addr)
 
         # Handle the command
@@ -240,6 +245,67 @@ class VISCABridge:
 
         # Send completion
         self._send_response(VISCAResponse.completion(), addr)
+
+    def _handle_special_command(self, cmd, addr: tuple):
+        """Handle special commands that require specific responses."""
+        if cmd.command_type == VISCACommandType.IF_CLEAR:
+            # Interface clear - just acknowledge
+            if DEBUG_VISCA:
+                print("Responding to IF_Clear")
+            self._send_response(VISCAResponse.if_clear(), addr)
+
+        elif cmd.command_type == VISCACommandType.ADDRESS_SET:
+            # Address set - respond with our address (1)
+            if DEBUG_VISCA:
+                print("Responding to AddressSet")
+            self._send_response(VISCAResponse.address_set(), addr)
+
+        elif cmd.command_type == VISCACommandType.VERSION_INQ:
+            # Version inquiry
+            if DEBUG_VISCA:
+                print("Responding to VersionInq")
+            self._send_response(VISCAResponse.version_inquiry(), addr)
+
+        elif cmd.command_type == VISCACommandType.CAM_INQUIRY:
+            # Handle other inquiries
+            self._handle_inquiry(cmd, addr)
+
+        else:
+            # Unknown special command - send completion anyway
+            self._send_response(VISCAResponse.completion(), addr)
+
+    def _handle_inquiry(self, cmd, addr: tuple):
+        """Handle inquiry commands."""
+        inq_type = cmd.inquiry_type
+        if inq_type is None:
+            self._send_response(VISCAResponse.completion(), addr)
+            return
+
+        cat, item = inq_type
+
+        # Power inquiry: 81 09 04 00 FF
+        if cat == 0x04 and item == 0x00:
+            if DEBUG_VISCA:
+                print("Responding to PowerInq")
+            self._send_response(VISCAResponse.power_inquiry(True), addr)
+
+        # Zoom position inquiry: 81 09 04 47 FF
+        elif cat == 0x04 and item == 0x47:
+            if DEBUG_VISCA:
+                print("Responding to ZoomPosInq")
+            self._send_response(VISCAResponse.zoom_position(0x0000), addr)
+
+        # Pan-Tilt position inquiry: 81 09 06 12 FF
+        elif cat == 0x06 and item == 0x12:
+            if DEBUG_VISCA:
+                print("Responding to Pan-TiltPosInq")
+            self._send_response(VISCAResponse.pan_tilt_position(0x0000, 0x0000), addr)
+
+        else:
+            # Unknown inquiry - send generic completion
+            if DEBUG_VISCA:
+                print(f"Unknown inquiry {cat:02X} {item:02X}, sending completion")
+            self._send_response(VISCAResponse.completion(), addr)
 
     def _send_response(self, response: bytes, addr: tuple):
         """Send a VISCA response packet."""

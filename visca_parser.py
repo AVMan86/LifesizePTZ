@@ -4,8 +4,8 @@ VISCA Command Parser
 Parses VISCA-over-IP commands and extracts camera control instructions.
 
 VISCA packet structure:
-- Byte 0: 0x81 (address byte - camera 1)
-- Byte 1: 0x01 (command type)
+- Byte 0: 0x81 (address byte - camera 1) or 0x88 (broadcast)
+- Byte 1: 0x01 (command) or 0x09 (inquiry)
 - Byte 2+: Command category and parameters
 - Final byte: 0xFF (terminator)
 
@@ -15,6 +15,9 @@ Supported commands:
 - Zoom tele:      81 01 04 07 02 FF
 - Zoom wide:      81 01 04 07 03 FF
 - Zoom stop:      81 01 04 07 00 FF
+- IF_Clear:       88 01 00 01 FF (broadcast)
+- AddressSet:     88 30 01 FF (broadcast)
+- CAM_VersionInq: 81 09 00 02 FF
 """
 
 from config import IRCommand, VISCA_PANTILT_MAP, DEBUG_VISCA
@@ -33,6 +36,10 @@ class VISCACommandType:
     POWER = 4
     PRESET = 5
     INQUIRY = 6
+    IF_CLEAR = 7
+    ADDRESS_SET = 8
+    VERSION_INQ = 9
+    CAM_INQUIRY = 10
 
 
 class VISCACommand:
@@ -42,6 +49,8 @@ class VISCACommand:
         self.raw_data = None
         self.command_type = VISCACommandType.UNKNOWN
         self.valid = False
+        self.needs_response = False  # True if this requires a special response
+        self.inquiry_type = None     # For inquiry commands
 
         # Pan-tilt specific
         self.pan_speed = 0
@@ -105,31 +114,111 @@ class VISCAParser:
                 print(f"VISCA: Packet too short ({len(data)} bytes)")
             return cmd
 
-        # Check for valid VISCA packet
-        if data[0] != 0x81:
-            if DEBUG_VISCA:
-                print(f"VISCA: Invalid address byte: 0x{data[0]:02X}")
-            return cmd
-
         if data[-1] != 0xFF:
             if DEBUG_VISCA:
                 print(f"VISCA: Missing terminator, last byte: 0x{data[-1]:02X}")
             return cmd
 
-        # Parse based on command category
-        if len(data) >= 4 and data[1] == 0x01:
-            if data[2] == 0x06:  # Pan-Tilt category
-                self._parse_pan_tilt(data, cmd)
-            elif data[2] == 0x04:  # Camera category (zoom, focus)
-                self._parse_camera(data, cmd)
-            elif data[2] == 0x00:  # Power
-                self._parse_power(data, cmd)
+        # Check address byte
+        addr = data[0]
+        if addr == 0x88:
+            # Broadcast command
+            self._parse_broadcast(data, cmd)
+        elif addr == 0x81:
+            # Camera 1 command
+            if len(data) >= 4:
+                if data[1] == 0x01:  # Command
+                    if data[2] == 0x06:  # Pan-Tilt category
+                        self._parse_pan_tilt(data, cmd)
+                    elif data[2] == 0x04:  # Camera category (zoom, focus)
+                        self._parse_camera(data, cmd)
+                    elif data[2] == 0x00:  # Interface/Power
+                        self._parse_interface(data, cmd)
+                elif data[1] == 0x09:  # Inquiry
+                    self._parse_inquiry(data, cmd)
+        else:
+            if DEBUG_VISCA:
+                print(f"VISCA: Unknown address byte: 0x{addr:02X}")
 
         if DEBUG_VISCA and cmd.valid:
             print(f"VISCA: Parsed {cmd}")
 
         self.last_command = cmd
         return cmd
+
+    def _parse_broadcast(self, data: bytes, cmd: VISCACommand):
+        """Parse broadcast commands (address 0x88)"""
+        if len(data) < 4:
+            return
+
+        # IF_Clear: 88 01 00 01 FF
+        if len(data) >= 5 and data[1] == 0x01 and data[2] == 0x00 and data[3] == 0x01:
+            cmd.command_type = VISCACommandType.IF_CLEAR
+            cmd.valid = True
+            cmd.needs_response = True
+            if DEBUG_VISCA:
+                print("VISCA: IF_Clear (interface clear)")
+            return
+
+        # Address Set: 88 30 01 FF
+        if len(data) >= 4 and data[1] == 0x30:
+            cmd.command_type = VISCACommandType.ADDRESS_SET
+            cmd.valid = True
+            cmd.needs_response = True
+            if DEBUG_VISCA:
+                print("VISCA: AddressSet command")
+            return
+
+        if DEBUG_VISCA:
+            print(f"VISCA: Unknown broadcast command: {data.hex()}")
+
+    def _parse_inquiry(self, data: bytes, cmd: VISCACommand):
+        """Parse inquiry commands (81 09 xx xx FF)"""
+        if len(data) < 5:
+            return
+
+        cmd.command_type = VISCACommandType.CAM_INQUIRY
+        cmd.valid = True
+        cmd.needs_response = True
+        cmd.inquiry_type = (data[2], data[3])
+
+        # CAM_VersionInq: 81 09 00 02 FF
+        if data[2] == 0x00 and data[3] == 0x02:
+            cmd.command_type = VISCACommandType.VERSION_INQ
+            if DEBUG_VISCA:
+                print("VISCA: CAM_VersionInq")
+        # CAM_PowerInq: 81 09 04 00 FF
+        elif data[2] == 0x04 and data[3] == 0x00:
+            if DEBUG_VISCA:
+                print("VISCA: CAM_PowerInq")
+        # CAM_ZoomPosInq: 81 09 04 47 FF
+        elif data[2] == 0x04 and data[3] == 0x47:
+            if DEBUG_VISCA:
+                print("VISCA: CAM_ZoomPosInq")
+        # Pan-Tilt Position Inq: 81 09 06 12 FF
+        elif data[2] == 0x06 and data[3] == 0x12:
+            if DEBUG_VISCA:
+                print("VISCA: Pan-TiltPosInq")
+        else:
+            if DEBUG_VISCA:
+                print(f"VISCA: Inquiry {data[2]:02X} {data[3]:02X}")
+
+    def _parse_interface(self, data: bytes, cmd: VISCACommand):
+        """Parse interface commands (81 01 00 xx FF)"""
+        if len(data) < 5:
+            return
+
+        # IF_Clear for single camera: 81 01 00 01 FF
+        if data[3] == 0x01:
+            cmd.command_type = VISCACommandType.IF_CLEAR
+            cmd.valid = True
+            cmd.needs_response = True
+            if DEBUG_VISCA:
+                print("VISCA: IF_Clear (single)")
+            return
+
+        # Could be power command routed here incorrectly
+        self._parse_power(data, cmd)
 
     def _parse_pan_tilt(self, data: bytes, cmd: VISCACommand):
         """Parse pan-tilt commands"""
@@ -250,6 +339,72 @@ class VISCAResponse:
             VISCAResponse.ack(socket_num),
             VISCAResponse.completion(socket_num)
         )
+
+    @staticmethod
+    def address_set() -> bytes:
+        """
+        Response to AddressSet broadcast command.
+        Returns network change response: 88 30 01 FF -> 90 30 01 FF
+        (Camera at address 1)
+        """
+        return bytes([0x90, 0x30, 0x01, 0xFF])
+
+    @staticmethod
+    def if_clear() -> bytes:
+        """
+        Response to IF_Clear command.
+        Just send completion.
+        """
+        return bytes([0x90, 0x50, 0xFF])
+
+    @staticmethod
+    def version_inquiry() -> bytes:
+        """
+        Response to CAM_VersionInq (81 09 00 02 FF)
+        Returns: 90 50 VV VV VV VV RR RR SS SS FF
+        - VVVV = Vendor ID (Sony = 0020)
+        - RRRR = Model code
+        - SSSS = ROM version
+        We'll fake a generic PTZ camera response.
+        """
+        return bytes([
+            0x90, 0x50,
+            0x00, 0x20,  # Vendor ID (Sony-compatible)
+            0x04, 0x00,  # Model code (generic PTZ)
+            0x00, 0x01,  # ROM version 0.1
+            0x00, 0x00,  # Socket number / max
+            0xFF
+        ])
+
+    @staticmethod
+    def power_inquiry(power_on: bool = True) -> bytes:
+        """
+        Response to CAM_PowerInq (81 09 04 00 FF)
+        Returns: 90 50 02 FF (on) or 90 50 03 FF (off)
+        """
+        return bytes([0x90, 0x50, 0x02 if power_on else 0x03, 0xFF])
+
+    @staticmethod
+    def zoom_position(position: int = 0) -> bytes:
+        """
+        Response to CAM_ZoomPosInq (81 09 04 47 FF)
+        Returns: 90 50 0p 0q 0r 0s FF where pqrs is position
+        """
+        p = (position >> 12) & 0x0F
+        q = (position >> 8) & 0x0F
+        r = (position >> 4) & 0x0F
+        s = position & 0x0F
+        return bytes([0x90, 0x50, p, q, r, s, 0xFF])
+
+    @staticmethod
+    def pan_tilt_position(pan: int = 0, tilt: int = 0) -> bytes:
+        """
+        Response to Pan-TiltPosInq (81 09 06 12 FF)
+        Returns: 90 50 0w 0w 0w 0w 0z 0z 0z 0z FF
+        """
+        pw = [(pan >> 12) & 0x0F, (pan >> 8) & 0x0F, (pan >> 4) & 0x0F, pan & 0x0F]
+        tz = [(tilt >> 12) & 0x0F, (tilt >> 8) & 0x0F, (tilt >> 4) & 0x0F, tilt & 0x0F]
+        return bytes([0x90, 0x50] + pw + tz + [0xFF])
 
 
 # Error codes
