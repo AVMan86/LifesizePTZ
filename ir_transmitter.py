@@ -322,58 +322,56 @@ class IRTransmitterSoftware:
     """
     Software-based IR transmitter using bit-banging.
 
-    Uses @micropython.native for faster execution.
-    Calibrated for RP2350 at 150MHz default clock.
+    Uses @micropython.native for faster execution and disables interrupts
+    during carrier generation for consistent timing.
     """
 
     def __init__(self, pin_num=PIN_IR_LED):
         self.pin = Pin(pin_num, Pin.OUT, value=0)
-        # Get raw pin for faster access
         self.pin_num = pin_num
         if DEBUG_IR:
             print(f"IR TX Software: Initialized on GPIO {pin_num}")
 
     @micropython.native
-    def _carrier_burst_native(self, duration_us: int):
+    def _carrier_burst(self, duration_us: int):
         """
-        Generate a carrier burst using native code for speed.
+        Generate a 38kHz carrier burst for the specified duration.
 
-        On RP2350 at 150MHz, we need about 1973 cycles for one 38kHz period (26.3us).
-        With native code, a tight toggle loop runs much faster.
-        We calibrate based on measured performance.
+        Uses ticks_us() for timing and disables interrupts for consistency.
+        38kHz = 26.3us period, with 33% duty cycle:
+        - High: ~9us
+        - Low: ~17us
         """
+        import machine
         pin = self.pin
-        # Number of carrier cycles needed
-        # Each 38kHz cycle is ~26.3us, so for duration_us we need:
-        cycles = duration_us // 26
 
-        # Native tight loop - each iteration is roughly one carrier cycle
-        # The actual timing depends on the chip speed, but native code
-        # runs much faster than interpreted Python
-        for _ in range(cycles):
-            pin.value(1)
-            # Tiny delay for high period (~9us for 33% duty)
-            for _d in range(30):  # Calibrate this value
-                pass
-            pin.value(0)
-            # Longer delay for low period (~17us for 67% duty)
-            for _d in range(60):  # Calibrate this value
-                pass
+        # Disable interrupts for consistent timing
+        irq_state = machine.disable_irq()
+
+        try:
+            end_time = time.ticks_us() + duration_us
+
+            while time.ticks_diff(end_time, time.ticks_us()) > 0:
+                # One carrier cycle at ~38kHz
+                pin.value(1)
+                # Brief high period - use tight loop, ~9us target
+                t = time.ticks_us()
+                while time.ticks_diff(time.ticks_us(), t) < 8:
+                    pass
+                pin.value(0)
+                # Longer low period - ~17us target
+                t = time.ticks_us()
+                while time.ticks_diff(time.ticks_us(), t) < 16:
+                    pass
+        finally:
+            # Re-enable interrupts
+            machine.enable_irq(irq_state)
 
     @micropython.native
-    def _space_native(self, duration_us: int):
-        """Wait with IR LED off using native code."""
-        self.pin.value(0)
-        # Use time.sleep_us for spaces since timing is less critical
-        time.sleep_us(duration_us)
-
-    def _carrier_burst(self, duration_us: int):
-        """Generate a carrier burst for the specified duration."""
-        self._carrier_burst_native(duration_us)
-
     def _space(self, duration_us: int):
         """Wait with IR LED off."""
-        self._space_native(duration_us)
+        self.pin.value(0)
+        time.sleep_us(duration_us)
 
     def transmit_command(self, command_code: int):
         """Transmit a command using software timing."""
