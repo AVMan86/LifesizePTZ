@@ -191,6 +191,10 @@ class VISCAParser:
         elif data[2] == 0x04 and data[3] == 0x00:
             if DEBUG_VISCA:
                 print("VISCA: CAM_PowerInq")
+        # Block Inquiry Mode: 81 09 04 39 FF (used by PTZ controller for connection test)
+        elif data[2] == 0x04 and data[3] == 0x39:
+            if DEBUG_VISCA:
+                print("VISCA: BlockInquiryMode (connection test)")
         # CAM_ZoomPosInq: 81 09 04 47 FF
         elif data[2] == 0x04 and data[3] == 0x47:
             if DEBUG_VISCA:
@@ -405,6 +409,15 @@ class VISCAResponse:
         pw = [(pan >> 12) & 0x0F, (pan >> 8) & 0x0F, (pan >> 4) & 0x0F, pan & 0x0F]
         tz = [(tilt >> 12) & 0x0F, (tilt >> 8) & 0x0F, (tilt >> 4) & 0x0F, tilt & 0x0F]
         return bytes([0x90, 0x50] + pw + tz + [0xFF])
+
+    @staticmethod
+    def block_inquiry() -> bytes:
+        """
+        Response to Block Inquiry Mode (81 09 04 39 FF)
+        Used by PTZ controllers for connection testing.
+        Returns: 90 50 00 00 00 00 FF
+        """
+        return bytes([0x90, 0x50, 0x00, 0x00, 0x00, 0x00, 0xFF])
 
 
 # Error codes

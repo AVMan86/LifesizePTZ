@@ -289,6 +289,12 @@ class VISCABridge:
                 print("Responding to PowerInq")
             self._send_response(VISCAResponse.power_inquiry(True), addr)
 
+        # Block inquiry: 81 09 04 39 FF (connection test)
+        elif cat == 0x04 and item == 0x39:
+            if DEBUG_VISCA:
+                print("Responding to BlockInquiry (connection test)")
+            self._send_response(VISCAResponse.block_inquiry(), addr)
+
         # Zoom position inquiry: 81 09 04 47 FF
         elif cat == 0x04 and item == 0x47:
             if DEBUG_VISCA:
