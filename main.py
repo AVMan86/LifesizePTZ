@@ -187,14 +187,22 @@ class VISCABridge:
 
             # Create UDP socket
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self.socket.bind(('', VISCA_PORT))
+
+            # Bind to specific IP - important for W5500 to work correctly
+            # Using '' can cause issues on some embedded systems
+            bind_addr = (BRIDGE_IP, VISCA_PORT)
+            print(f"Binding socket to {bind_addr[0]}:{bind_addr[1]}...")
+            self.socket.bind(bind_addr)
             self.socket.setblocking(False)
 
-            print(f"Listening for VISCA commands on {BRIDGE_IP}:{VISCA_PORT}")
+            print(f"Socket bound successfully!")
+            print(f"Listening for VISCA commands on {BRIDGE_IP}:{VISCA_PORT} (UDP)")
             return True
 
         except Exception as e:
             print(f"ERROR: Socket initialization failed: {e}")
+            import sys
+            sys.print_exception(e)
             return False
 
     def process_visca(self, data: bytes, addr: tuple):
@@ -317,11 +325,13 @@ class VISCABridge:
         """Send a VISCA response packet."""
         if self.socket is not None:
             try:
-                self.socket.sendto(response, addr)
-                if DEBUG_VISCA:
-                    print(f"VISCA response: {response.hex()}")
+                print(f"<<< SENDING RESPONSE to {addr[0]}:{addr[1]}: {response.hex()}")
+                bytes_sent = self.socket.sendto(response, addr)
+                print(f"<<< Sent {bytes_sent} bytes")
             except Exception as e:
                 print(f"Failed to send response: {e}")
+                import sys
+                sys.print_exception(e)
 
     def blink_led(self):
         """Blink the status LED to indicate activity."""
@@ -387,10 +397,17 @@ class VISCABridge:
                     try:
                         data, addr = self.socket.recvfrom(256)
                         if data and len(data) > 0:
+                            print(f"\n>>> PACKET RECEIVED: {len(data)} bytes from {addr[0]}:{addr[1]}")
+                            print(f">>> Raw data: {data.hex()}")
                             self.process_visca(data, addr)
-                    except OSError:
-                        # No data available (non-blocking)
+                    except OSError as e:
+                        # No data available (non-blocking) - error code 11 is EAGAIN
+                        # Only print if it's not the expected "no data" error
+                        if hasattr(e, 'errno') and e.errno != 11:
+                            print(f"Socket OSError: {e}")
                         pass
+                    except Exception as e:
+                        print(f"Socket read error: {e}")
 
                 # Small delay to prevent tight loop
                 time.sleep_ms(1)
