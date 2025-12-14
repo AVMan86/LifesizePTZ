@@ -364,6 +364,30 @@ class IRTransmitterSoftware:
             elapsed = time.ticks_diff(time.ticks_us(), start_time)
             print(f"IR TX: Frame complete ({elapsed}us)")
 
+    def test_command(self, command_code: int, repeats: int = 1, gap_ms: int = 57):
+        """
+        Test transmitting a command with repeats.
+
+        Args:
+            command_code: Command to send
+            repeats: Number of times to repeat
+            gap_ms: Gap between repeats in milliseconds
+        """
+        cmd_name = None
+        for name in dir(IRCommand):
+            if not name.startswith('_') and getattr(IRCommand, name) == command_code:
+                cmd_name = name
+                break
+
+        print(f"IR TX: Testing {cmd_name or hex(command_code)} x{repeats}")
+
+        for i in range(repeats):
+            self.transmit_command(command_code)
+            if i < repeats - 1:
+                time.sleep_ms(gap_ms)
+
+        print(f"IR TX: Test complete")
+
 
 # =============================================================================
 # Module-level transmitter instance
