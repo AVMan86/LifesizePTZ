@@ -46,17 +46,17 @@ IR_CARRIER_FREQ_HZ = 38000
 IR_CARRIER_PERIOD_US = 26  # ~26.3us for 38kHz
 IR_CARRIER_DUTY_CYCLE = 0.33  # 33% duty cycle
 
-# Leader pulse timing
-IR_LEADER_MARK_US = 2600
-IR_LEADER_SPACE_US = 1120
+# Leader pulse timing (measured from original LifeSize remote)
+IR_LEADER_MARK_US = 2550   # ~2.55ms leader mark
+IR_LEADER_SPACE_US = 1400  # ~1.4ms leader space (was 1120)
 
-# Bit encoding timing
-IR_BIT_MARK_US = 560      # Mark duration for all bits
-IR_BIT_0_SPACE_US = 560   # Short space = 0
-IR_BIT_1_SPACE_US = 1680  # Long space = 1
+# Bit encoding timing (measured from original LifeSize remote)
+IR_BIT_MARK_US = 500       # ~500us mark duration for all bits
+IR_BIT_0_SPACE_US = 750    # ~750-800us space = 0 (was 560)
+IR_BIT_1_SPACE_US = 1900   # ~1.9ms space = 1 (was 1680)
 
 # Stop bit
-IR_STOP_MARK_US = 560
+IR_STOP_MARK_US = 500
 
 # Frame timing
 IR_FRAME_GAP_MS = 57      # Critical 57ms gap between frames
