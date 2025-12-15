@@ -156,6 +156,11 @@ class IRTransmitter:
 
         if DEBUG_IR:
             print(f"IR TX: {len(packed_data)} words to send")
+            # Show first few timing values for debugging
+            print(f"IR TX: First 3 timings (mark,space): {timings[:3]}")
+            print(f"IR TX: First 3 packed: {[hex(p) for p in packed_data[:3]]}")
+            # Verify cycle calculations
+            print(f"IR TX: Carrier period={self.CARRIER_PERIOD_US:.2f}us, cycles for 560us={self._us_to_cycles(560)}")
 
         # Ensure pin starts low and SM is stopped
         self.sm.active(0)
