@@ -1,11 +1,12 @@
 """
 PIO-based IR Transmitter for LifeSize Camera
 
-Uses a PIO state machine to generate precise 38kHz carrier.
-The carrier runs continuously when the state machine is active,
-and mark/space timing is controlled by enabling/disabling the SM.
+Uses a PIO state machine to generate the complete IR waveform with precise timing.
+All timing is hardware-controlled - Python just feeds data to the FIFO.
 
-This approach avoids FIFO blocking issues by not feeding data to the PIO.
+The PIO reads mark/space duration pairs from FIFO and generates:
+- 38kHz carrier during mark periods
+- Pin low during space periods
 """
 
 import rp2
@@ -25,39 +26,69 @@ from ir_protocol import protocol
 
 
 # =============================================================================
-# PIO Program - Simple 38kHz carrier generator
+# PIO Program - IR Transmitter with 38kHz carrier
 # =============================================================================
 
-@asm_pio(set_init=PIO.OUT_LOW)
-def ir_carrier():
+@asm_pio(set_init=PIO.OUT_LOW, autopull=True, pull_thresh=32)
+def ir_tx_pio():
     """
-    Generate continuous 38kHz carrier with ~33% duty cycle.
+    Generate IR waveform with 38kHz carrier.
 
-    At 38kHz, period = 26.3us
-    With 33% duty: high = 8.7us, low = 17.5us
+    Input format: 32-bit words with mark_cycles (upper 16) and space_cycles (lower 16)
+    Each cycle unit = 1 carrier period (~26.3us at 38kHz)
 
-    PIO cycle calculation:
-    - Carrier cycle in PIO = 19 cycles (7 high + 12 low)
-    - PIO freq = 38000 Hz * 19 cycles = 722000 Hz
-    - Duty cycle = 7/19 = 36.8% (close enough to 33%)
+    PIO runs at 38kHz * 19 = 722kHz (19 cycles per carrier period)
+    - Total cycle: 19 PIO clocks
+    - High time: 6 cycles (~32% duty)
+    - Low time: 13 cycles
+
+    For a 560us mark: 560us / 26.3us = ~21 carrier cycles
+    For a 1680us space: 1680us / 26.3us = ~64 carrier cycles
     """
+    # Main loop - get data and generate waveform
     wrap_target()
-    set(pins, 1)    [6]     # 7 cycles high (including instruction)
-    set(pins, 0)    [11]    # 12 cycles low (including instruction)
-    wrap()                   # Total: 19 cycles per carrier period
+
+    # Get mark duration (upper 16 bits) into X
+    out(x, 16)
+
+    # Get space duration (lower 16 bits) into Y
+    out(y, 16)
+
+    # Generate carrier burst for X cycles
+    # Loop structure: 1 + 6 + 11 + 1 = 19 PIO cycles per carrier period
+    label("mark_loop")
+    jmp(not_x, "space_start")      # 1 cycle: If X=0, go to space
+    set(pins, 1)            [5]    # 6 cycles: High
+    set(pins, 0)            [10]   # 11 cycles: Low
+    jmp(x_dec, "mark_loop")        # 1 cycle: Decrement X and loop
+
+    # Space period - keep pin low for Y carrier-cycle-equivalents
+    label("space_start")
+    set(pins, 0)                   # Ensure pin is low
+    label("space_loop")
+    jmp(not_y, "next_word")        # 1 cycle: If Y=0, get next word
+    nop()                   [16]   # 17 cycles: Delay
+    jmp(y_dec, "space_loop")       # 1 cycle: Decrement Y, total 19
+
+    label("next_word")
+    # wrap() will jump back to wrap_target() for next word
+    wrap()
 
 
 # =============================================================================
-# PIO-based IR Transmitter
+# IR Transmitter Class
 # =============================================================================
 
 class IRTransmitter:
     """
-    IR transmitter using PIO for precise 38kHz carrier generation.
+    IR transmitter using PIO for precise timing.
 
-    The PIO generates the carrier continuously when active.
-    Mark/space timing is controlled by activating/deactivating the SM.
+    All timing is hardware-controlled. Python just packs timing data
+    and feeds it to the PIO FIFO.
     """
+
+    # Carrier period in microseconds
+    CARRIER_PERIOD_US = 1_000_000 / IR_CARRIER_FREQ_HZ  # ~26.3us
 
     def __init__(self, pin_num=PIN_IR_LED, sm_num=0):
         self.pin = Pin(pin_num, Pin.OUT, value=0)
@@ -71,15 +102,13 @@ class IRTransmitter:
             print(f"IR TX PIO: Initialized on GPIO {pin_num}")
 
     def _init_pio(self):
-        """Initialize the PIO state machine for 38kHz carrier."""
-        # Calculate PIO frequency for accurate 38kHz
-        # Carrier cycle in PIO program = 19 cycles (7 high + 12 low)
-        # PIO freq = 38000 Hz * 19 cycles = 722000 Hz
-        pio_freq = IR_CARRIER_FREQ_HZ * 19
+        """Initialize the PIO state machine."""
+        # PIO frequency for 38kHz carrier with 19 cycles per period
+        pio_freq = IR_CARRIER_FREQ_HZ * 19  # 722000 Hz
 
         self.sm = StateMachine(
             self.sm_num,
-            ir_carrier,
+            ir_tx_pio,
             freq=pio_freq,
             set_base=self.pin,
         )
@@ -89,21 +118,18 @@ class IRTransmitter:
             actual_carrier = pio_freq / 19
             print(f"IR TX PIO: Carrier = {actual_carrier/1000:.2f}kHz")
 
-    def _mark(self, duration_us: int):
-        """Generate carrier burst (mark) for specified duration."""
-        # Compensate for sleep_us overhead (~100us)
-        adjusted = max(100, duration_us - 100)
-        self.sm.active(1)
-        time.sleep_us(adjusted)
-        self.sm.active(0)
-        self.pin.value(0)  # Ensure pin is low after stopping
+    def _us_to_cycles(self, us: int) -> int:
+        """Convert microseconds to carrier cycles."""
+        cycles = int(us / self.CARRIER_PERIOD_US)
+        return max(1, cycles)  # At least 1 cycle
 
-    def _space(self, duration_us: int):
-        """Wait with output low (space)."""
-        # Compensate for sleep_us overhead (~100us)
-        adjusted = max(100, duration_us - 100)
-        self.pin.value(0)
-        time.sleep_us(adjusted)
+    def _pack_timing(self, mark_us: int, space_us: int) -> int:
+        """Pack mark/space timing into a 32-bit word."""
+        mark_cycles = self._us_to_cycles(mark_us)
+        space_cycles = self._us_to_cycles(space_us) if space_us > 0 else 0
+
+        # Upper 16 bits = mark, lower 16 bits = space
+        return (mark_cycles << 16) | (space_cycles & 0xFFFF)
 
     def transmit_command(self, command_code: int):
         """Transmit a complete IR command."""
@@ -115,13 +141,32 @@ class IRTransmitter:
         # Get timing sequence from protocol encoder
         timings = protocol.encode_command(command_code)
 
-        # Transmit each mark/space pair
+        # Pack all timing data
+        packed_data = []
         for mark_us, space_us in timings:
-            self._mark(mark_us)
-            if space_us > 0:
-                self._space(space_us)
+            packed_data.append(self._pack_timing(mark_us, space_us))
 
+        # Ensure pin starts low
         self.pin.value(0)
+
+        # Activate state machine and feed data
+        self.sm.active(1)
+
+        try:
+            # Feed all timing data to FIFO
+            # PIO will consume it at the carrier rate
+            for word in packed_data:
+                self.sm.put(word)
+
+            # Wait for transmission to complete
+            # Calculate expected duration
+            total_us = sum(mark + space for mark, space in timings)
+            time.sleep_us(total_us + 1000)  # Add 1ms margin
+
+        finally:
+            # Stop state machine and ensure pin is low
+            self.sm.active(0)
+            self.pin.value(0)
 
         if DEBUG_IR:
             elapsed = time.ticks_diff(time.ticks_us(), start_time)
@@ -130,11 +175,117 @@ class IRTransmitter:
     def test_carrier(self, duration_ms: int = 100):
         """Test carrier generation for specified duration."""
         print(f"IR TX: Testing carrier for {duration_ms}ms")
+
+        # Pack a single long mark with no space
+        cycles = int((duration_ms * 1000) / self.CARRIER_PERIOD_US)
+        word = (cycles << 16) | 0  # All mark, no space
+
         self.sm.active(1)
-        time.sleep_ms(duration_ms)
+        self.sm.put(word)
+        time.sleep_ms(duration_ms + 10)
         self.sm.active(0)
         self.pin.value(0)
+
         print("IR TX: Carrier test complete")
+
+    def test_command(self, command_code: int, repeats: int = 1, gap_ms: int = 57):
+        """Test transmitting a command with repeats."""
+        cmd_name = None
+        for name in dir(IRCommand):
+            if not name.startswith('_') and getattr(IRCommand, name) == command_code:
+                cmd_name = name
+                break
+
+        print(f"IR TX: Testing {cmd_name or hex(command_code)} x{repeats}")
+
+        for i in range(repeats):
+            self.transmit_command(command_code)
+            if i < repeats - 1:
+                time.sleep_ms(gap_ms)
+
+        print("IR TX: Test complete")
+
+
+# =============================================================================
+# Simple PIO Carrier + Software Timing (Alternative approach)
+# =============================================================================
+
+@asm_pio(set_init=PIO.OUT_LOW)
+def ir_carrier_simple():
+    """
+    Generate continuous 38kHz carrier.
+    Enabled/disabled by Python for mark/space timing.
+    """
+    wrap_target()
+    set(pins, 1)    [6]     # 7 cycles high
+    set(pins, 0)    [11]    # 12 cycles low
+    wrap()
+
+
+class IRTransmitterSimple:
+    """
+    Simpler IR transmitter: PIO generates carrier, Python controls timing.
+
+    Uses interrupt disable for more consistent timing.
+    """
+
+    def __init__(self, pin_num=PIN_IR_LED, sm_num=0):
+        self.pin = Pin(pin_num, Pin.OUT, value=0)
+        self.pin_num = pin_num
+        self.sm_num = sm_num
+
+        pio_freq = IR_CARRIER_FREQ_HZ * 19
+        self.sm = StateMachine(
+            self.sm_num,
+            ir_carrier_simple,
+            freq=pio_freq,
+            set_base=self.pin,
+        )
+
+        if DEBUG_IR:
+            print(f"IR TX Simple: Initialized on GPIO {pin_num}")
+
+    @micropython.viper
+    def _transmit_frame(self, timings):
+        """Transmit frame with interrupts disabled for consistent timing."""
+        import machine
+        from time import sleep_us
+
+        sm = self.sm
+        pin = self.pin
+
+        # Disable interrupts for consistent timing
+        irq_state = machine.disable_irq()
+
+        try:
+            for mark_us, space_us in timings:
+                # Mark: enable carrier
+                sm.active(1)
+                sleep_us(mark_us)
+                sm.active(0)
+                pin.value(0)
+
+                # Space: keep low
+                if space_us > 0:
+                    sleep_us(space_us)
+        finally:
+            machine.enable_irq(irq_state)
+            sm.active(0)
+            pin.value(0)
+
+    def transmit_command(self, command_code: int):
+        """Transmit a complete IR command."""
+        if DEBUG_IR:
+            print(f"IR TX: Sending 0x{command_code:02X}")
+
+        start_time = time.ticks_us()
+        timings = protocol.encode_command(command_code)
+
+        self._transmit_frame(timings)
+
+        if DEBUG_IR:
+            elapsed = time.ticks_diff(time.ticks_us(), start_time)
+            print(f"IR TX: Frame complete ({elapsed}us)")
 
     def test_command(self, command_code: int, repeats: int = 1, gap_ms: int = 57):
         """Test transmitting a command with repeats."""
@@ -240,23 +391,27 @@ class IRTransmitterSoftware:
 _transmitter = None
 
 
-def get_transmitter(use_pio: bool = True):
+def get_transmitter(mode: str = "pio"):
     """
     Get or create the default IR transmitter instance.
 
     Args:
-        use_pio: If True (default), use PIO-based transmitter for precise timing.
-                 If False, use software bit-banging fallback.
+        mode: "pio" for full PIO control (default, most precise)
+              "simple" for PIO carrier + software timing
+              "software" for pure software bit-banging
     """
     global _transmitter
     if _transmitter is None:
-        if use_pio:
+        if mode == "pio":
             try:
                 _transmitter = IRTransmitter()
-                print("IR TX: Using PIO-based transmitter")
+                print("IR TX: Using PIO-controlled transmitter")
             except Exception as e:
-                print(f"PIO init failed, using software: {e}")
-                _transmitter = IRTransmitterSoftware()
+                print(f"PIO init failed: {e}")
+                _transmitter = IRTransmitterSimple()
+        elif mode == "simple":
+            _transmitter = IRTransmitterSimple()
+            print("IR TX: Using PIO carrier + software timing")
         else:
             print("IR TX: Using software bit-bang transmitter")
             _transmitter = IRTransmitterSoftware()
@@ -278,7 +433,7 @@ if __name__ == "__main__":
     print("=" * 50)
 
     # Create transmitter (will use PIO by default)
-    tx = get_transmitter(use_pio=True)
+    tx = get_transmitter(mode="pio")
 
     print("\nPress Ctrl+C to stop\n")
 
