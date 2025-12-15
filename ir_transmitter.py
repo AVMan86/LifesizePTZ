@@ -91,15 +91,19 @@ class IRTransmitter:
 
     def _mark(self, duration_us: int):
         """Generate carrier burst (mark) for specified duration."""
+        # Compensate for sleep_us overhead (~100us)
+        adjusted = max(100, duration_us - 100)
         self.sm.active(1)
-        time.sleep_us(duration_us)
+        time.sleep_us(adjusted)
         self.sm.active(0)
         self.pin.value(0)  # Ensure pin is low after stopping
 
     def _space(self, duration_us: int):
         """Wait with output low (space)."""
+        # Compensate for sleep_us overhead (~100us)
+        adjusted = max(100, duration_us - 100)
         self.pin.value(0)
-        time.sleep_us(duration_us)
+        time.sleep_us(adjusted)
 
     def transmit_command(self, command_code: int):
         """Transmit a complete IR command."""
