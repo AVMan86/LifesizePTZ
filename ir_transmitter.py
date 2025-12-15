@@ -74,7 +74,7 @@ def ir_tx_pio():
     jmp(y_dec, "space_loop")       # 1 cycle: Decrement Y, total 19
 
     label("next_word")
-    # wrap() will jump back to wrap_target() for next word
+    nop()                          # Need an instruction here for jmp target before wrap
     wrap()
 
 
