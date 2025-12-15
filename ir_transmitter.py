@@ -245,11 +245,9 @@ class IRTransmitterSimple:
         if DEBUG_IR:
             print(f"IR TX Simple: Initialized on GPIO {pin_num}")
 
-    @micropython.viper
     def _transmit_frame(self, timings):
         """Transmit frame with interrupts disabled for consistent timing."""
         import machine
-        from time import sleep_us
 
         sm = self.sm
         pin = self.pin
@@ -261,13 +259,13 @@ class IRTransmitterSimple:
             for mark_us, space_us in timings:
                 # Mark: enable carrier
                 sm.active(1)
-                sleep_us(mark_us)
+                time.sleep_us(mark_us)
                 sm.active(0)
                 pin.value(0)
 
                 # Space: keep low
                 if space_us > 0:
-                    sleep_us(space_us)
+                    time.sleep_us(space_us)
         finally:
             machine.enable_irq(irq_state)
             sm.active(0)
