@@ -124,12 +124,17 @@ class IRTransmitter:
         return max(1, cycles)  # At least 1 cycle
 
     def _pack_timing(self, mark_us: int, space_us: int) -> int:
-        """Pack mark/space timing into a 32-bit word."""
+        """Pack mark/space timing into a 32-bit word.
+
+        PIO OUT instruction shifts from LSB side, so:
+        - Lower 16 bits go to X (mark cycles)
+        - Upper 16 bits go to Y (space cycles)
+        """
         mark_cycles = self._us_to_cycles(mark_us)
         space_cycles = self._us_to_cycles(space_us) if space_us > 0 else 0
 
-        # Upper 16 bits = mark, lower 16 bits = space
-        return (mark_cycles << 16) | (space_cycles & 0xFFFF)
+        # Lower 16 bits = mark (shifted to X first), upper 16 bits = space (shifted to Y)
+        return (space_cycles << 16) | (mark_cycles & 0xFFFF)
 
     def transmit_command(self, command_code: int):
         """Transmit a complete IR command."""
