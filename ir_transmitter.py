@@ -29,12 +29,12 @@ from ir_protocol import protocol
 # PIO Program - IR Transmitter with 38kHz carrier
 # =============================================================================
 
-@asm_pio(set_init=PIO.OUT_LOW, autopull=True, pull_thresh=32)
+@asm_pio(set_init=PIO.OUT_LOW)
 def ir_tx_pio():
     """
     Generate IR waveform with 38kHz carrier.
 
-    Input format: 32-bit words with mark_cycles (upper 16) and space_cycles (lower 16)
+    Input format: 32-bit words with mark_cycles (lower 16) and space_cycles (upper 16)
     Each cycle unit = 1 carrier period (~26.3us at 38kHz)
 
     PIO runs at 38kHz * 19 = 722kHz (19 cycles per carrier period)
@@ -48,10 +48,13 @@ def ir_tx_pio():
     # Main loop - get data and generate waveform
     wrap_target()
 
-    # Get mark duration (upper 16 bits) into X
+    # Explicitly pull next word from FIFO (blocks if empty)
+    pull(block)
+
+    # Get mark duration (lower 16 bits shifted out first) into X
     out(x, 16)
 
-    # Get space duration (lower 16 bits) into Y
+    # Get space duration (upper 16 bits) into Y
     out(y, 16)
 
     # Generate carrier burst for X cycles
