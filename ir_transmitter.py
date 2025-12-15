@@ -154,17 +154,28 @@ class IRTransmitter:
         for mark_us, space_us in timings:
             packed_data.append(self._pack_timing(mark_us, space_us))
 
-        # Ensure pin starts low
+        if DEBUG_IR:
+            print(f"IR TX: {len(packed_data)} words to send")
+
+        # Ensure pin starts low and SM is stopped
+        self.sm.active(0)
         self.pin.value(0)
 
-        # Activate state machine and feed data
+        # Pre-fill FIFO with first words BEFORE activating (FIFO depth is 4)
+        prefill_count = min(4, len(packed_data))
+        for i in range(prefill_count):
+            self.sm.put(packed_data[i])
+
+        if DEBUG_IR:
+            print(f"IR TX: Pre-filled {prefill_count} words, activating SM")
+
+        # Now activate state machine - it will start processing immediately
         self.sm.active(1)
 
         try:
-            # Feed all timing data to FIFO
-            # PIO will consume it at the carrier rate
-            for word in packed_data:
-                self.sm.put(word)
+            # Feed remaining data as FIFO drains
+            for i in range(prefill_count, len(packed_data)):
+                self.sm.put(packed_data[i])
 
             # Wait for transmission to complete
             # Calculate expected duration
