@@ -48,12 +48,13 @@ IR_CARRIER_DUTY_CYCLE = 0.33  # 33% duty cycle
 
 # Leader pulse timing (measured from original LifeSize remote)
 IR_LEADER_MARK_US = 2550   # ~2.55ms leader mark
-IR_LEADER_SPACE_US = 1400  # ~1.4ms leader space (was 1120)
+IR_LEADER_SPACE_US = 1200  # ~1.2ms leader space (measured 12-16-2025)
 
-# Bit encoding timing (measured from original LifeSize remote)
+# Bit encoding timing (measured from original LifeSize remote 12-16-2025)
+# Total bit time: 0-bit = ~1150us, 1-bit = ~2900us
 IR_BIT_MARK_US = 500       # ~500us mark duration for all bits
-IR_BIT_0_SPACE_US = 750    # ~750-800us space = 0 (was 560)
-IR_BIT_1_SPACE_US = 1900   # ~1.9ms space = 1 (was 1680)
+IR_BIT_0_SPACE_US = 650    # ~650us space = 0 (total ~1150us)
+IR_BIT_1_SPACE_US = 2400   # ~2.4ms space = 1 (total ~2900us)
 
 # Stop bit
 IR_STOP_MARK_US = 500
