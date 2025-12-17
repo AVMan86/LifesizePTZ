@@ -273,6 +273,16 @@ class VISCAParser:
         if len(data) < 6:
             return
 
+        # OK Button (custom command): 81 01 04 3F 02 7F FF
+        # Used to enable IR remote mode on LifeSize camera
+        if data[3] == 0x3F:
+            cmd.command_type = VISCACommandType.UNKNOWN  # Custom command
+            cmd.valid = True
+            cmd.ir_commands = [IRCommand.OK]
+            if DEBUG_VISCA:
+                print("VISCA: OK button (IR mode enable)")
+            return
+
         # Zoom: 81 01 04 07 XX FF
         if data[3] == 0x07:
             cmd.command_type = VISCACommandType.ZOOM
