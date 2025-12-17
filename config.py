@@ -37,31 +37,30 @@ PIN_W5500_RST = 6 # W5500 Reset pin
 PIN_LED = "LED"  # Pico 2W onboard LED
 
 # =============================================================================
-# IR Protocol Timing (microseconds)
+# IR Protocol Timing (microseconds) - Tuned from Gemini analysis
 # =============================================================================
-# LifeSize uses pulse-distance encoding at 38kHz carrier
+# LifeSize uses 16-bit pulse-distance encoding at 38kHz carrier
+# Protocol: Header + 16 data bits (MSB first) + Stop bit
+# Data format: Device code (0x98) << 8 | Command code
 
 # Carrier frequency
 IR_CARRIER_FREQ_HZ = 38000
-IR_CARRIER_PERIOD_US = 26  # ~26.3us for 38kHz
-IR_CARRIER_DUTY_CYCLE = 0.33  # 33% duty cycle
+IR_CARRIER_DUTY_U16 = 32768  # 50% duty cycle for PWM (0-65535 range)
 
-# Leader pulse timing (measured from original LifeSize remote)
-IR_LEADER_MARK_US = 2550   # ~2.55ms leader mark
-IR_LEADER_SPACE_US = 1200  # ~1.2ms leader space (measured 12-16-2025)
+# Header pulse timing (tuned for Pico overhead)
+IR_HEADER_MARK_US = 2550   # ~2.55ms header mark
+IR_HEADER_SPACE_US = 2500  # ~2.5ms header space
 
-# Bit encoding timing (measured from original LifeSize remote 12-16-2025)
-# Total bit time: 0-bit = ~1150us, 1-bit = ~2900us
-IR_BIT_MARK_US = 500       # ~500us mark duration for all bits
-IR_BIT_0_SPACE_US = 650    # ~650us space = 0 (total ~1150us)
-IR_BIT_1_SPACE_US = 2400   # ~2.4ms space = 1 (total ~2900us)
+# Bit encoding timing (tuned for Pico overhead)
+IR_BIT_MARK_US = 1200      # ~1.2ms mark for all bits
+IR_BIT_0_SPACE_US = 1050   # ~1.05ms space = 0
+IR_BIT_1_SPACE_US = 2825   # ~2.825ms space = 1
 
 # Stop bit
-IR_STOP_MARK_US = 500
+IR_STOP_MARK_US = 1200     # Same as bit mark
 
 # Frame timing
-IR_FRAME_GAP_MS = 57      # Critical 57ms gap between frames
-IR_FRAME_CYCLE_MS = 111   # Total cycle time (frame + gap)
+IR_PACKET_GAP_US = 57325   # Critical 57.325ms gap between packets
 
 # =============================================================================
 # LifeSize Device Code
@@ -70,7 +69,7 @@ LIFESIZE_DEVICE_CODE = 0x98
 LIFESIZE_DEVICE_CODE_INV = 0x67  # Inverted device code
 
 # =============================================================================
-# LifeSize Command Codes
+# LifeSize Command Codes (from Gemini analysis)
 # =============================================================================
 class IRCommand:
     """IR command codes for LifeSize camera"""
@@ -79,12 +78,8 @@ class IRCommand:
     LEFT = 0x25
     RIGHT = 0x2A
     OK = 0x1C       # OK/Select button
-    ZOOM_IN = 0x37  # Zoom Tele
-    ZOOM_OUT = 0x38 # Zoom Wide
-
-    # Additional commands (if discovered)
-    POWER = 0x00    # Placeholder - needs verification
-    MENU = 0x00     # Placeholder - needs verification
+    ZOOM_IN = 0x34  # Zoom Tele (corrected)
+    ZOOM_OUT = 0x3B # Zoom Wide (corrected)
 
 # =============================================================================
 # VISCA Command Mapping

@@ -468,7 +468,7 @@ def test_ir_commands():
 
     for name, cmd in commands:
         print(f"Testing {name}...")
-        tx.test_command(cmd, repeats=3, gap_ms=57)
+        tx.test_command(cmd, repeats=3)
         time.sleep(1)
 
     print("\nIR test complete\n")

@@ -14,8 +14,7 @@ import time
 from machine import Timer
 
 from config import (
-    IR_FRAME_GAP_MS,
-    IR_FRAME_CYCLE_MS,
+    IR_PACKET_GAP_US,
     SINGLE_PRESS_REPEATS,
     MOVEMENT_TIMEOUT_MS,
     MovementState,
@@ -24,7 +23,10 @@ from config import (
     DEBUG_TIMING,
 )
 from ir_transmitter import get_transmitter
-from ir_protocol import protocol
+
+# Derive millisecond values from config
+IR_FRAME_GAP_MS = IR_PACKET_GAP_US // 1000  # ~57ms
+IR_FRAME_CYCLE_MS = IR_FRAME_GAP_MS + 54    # Frame + gap (~111ms)
 
 
 class CommandScheduler:
