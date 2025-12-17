@@ -37,16 +37,19 @@ class IRTransmitter:
 
     Uses hardware PWM for carrier generation with duty cycle control
     for on/off timing. Simple and reliable approach.
+
+    Enforces the critical 57.3ms gap between frames for smooth camera movement.
     """
 
     def __init__(self, pin_num=PIN_IR_LED):
         self.pin_num = pin_num
         self.pwm = None
+        self.last_frame_end_us = 0  # Track when last frame ended
         self._init_pwm()
 
         if DEBUG_IR:
             print(f"IR TX: Initialized on GPIO {pin_num}")
-            print(f"IR TX: Carrier {IR_CARRIER_FREQ_HZ}Hz, duty {IR_CARRIER_DUTY_U16}")
+            print(f"IR TX: Carrier {IR_CARRIER_FREQ_HZ}Hz, gap {IR_PACKET_GAP_US}us")
 
     def _init_pwm(self):
         """Initialize PWM on the IR LED pin."""
@@ -62,13 +65,34 @@ class IRTransmitter:
         """Turn off the carrier (pin low)."""
         self.pwm.duty_u16(0)
 
+    def _wait_for_gap(self):
+        """
+        Wait if needed to maintain the 57.3ms gap between frames.
+        This ensures smooth camera movement by matching the original remote timing.
+        """
+        if self.last_frame_end_us == 0:
+            return  # First frame, no wait needed
+
+        now = time.ticks_us()
+        elapsed = time.ticks_diff(now, self.last_frame_end_us)
+
+        if elapsed < IR_PACKET_GAP_US:
+            remaining = IR_PACKET_GAP_US - elapsed
+            time.sleep_us(remaining)
+
     def _send_packet(self, code: int):
         """
-        Send a single IR packet.
+        Send a single IR packet with proper gap timing.
+
+        Waits for the 57.3ms gap if a previous frame was sent recently,
+        then sends the packet and records the end time.
 
         Args:
             code: 16-bit code (device << 8 | command)
         """
+        # Wait for gap from previous frame if needed
+        self._wait_for_gap()
+
         # 1. Header pulse
         self._carrier_on()
         time.sleep_us(IR_HEADER_MARK_US)
@@ -95,6 +119,9 @@ class IRTransmitter:
         time.sleep_us(IR_STOP_MARK_US)
         self._carrier_off()
 
+        # Record when this frame ended for gap timing
+        self.last_frame_end_us = time.ticks_us()
+
     def _build_code(self, command: int) -> int:
         """Build the 16-bit code from device code and command."""
         return (LIFESIZE_DEVICE_CODE << 8) | (command & 0xFF)
@@ -102,6 +129,8 @@ class IRTransmitter:
     def transmit_command(self, command_code: int, repeats: int = 1):
         """
         Transmit an IR command with optional repeats.
+
+        The 57.3ms gap between frames is automatically enforced by _send_packet().
 
         Args:
             command_code: 8-bit command code (e.g., 0x15 for UP)
@@ -114,10 +143,8 @@ class IRTransmitter:
 
         start_time = time.ticks_us()
 
-        for i in range(repeats):
-            self._send_packet(code)
-            if i < repeats - 1:
-                time.sleep_us(IR_PACKET_GAP_US)
+        for _ in range(repeats):
+            self._send_packet(code)  # Gap is enforced automatically
 
         if DEBUG_IR:
             elapsed = time.ticks_diff(time.ticks_us(), start_time)
@@ -132,8 +159,13 @@ class IRTransmitter:
         self._send_packet(code)
 
     def stop(self):
-        """Ensure carrier is off."""
+        """Ensure carrier is off and reset frame timing."""
         self._carrier_off()
+        self.last_frame_end_us = 0  # Reset so next command starts immediately
+
+    def reset_timing(self):
+        """Reset frame timing so next frame starts without gap delay."""
+        self.last_frame_end_us = 0
 
     def deinit(self):
         """Clean up PWM resources."""
@@ -150,7 +182,7 @@ class IRTransmitter:
         print("IR TX: Carrier test complete")
 
     def test_command(self, command_code: int, repeats: int = 3):
-        """Test transmitting a command with standard repeats and gap."""
+        """Test transmitting a command with standard repeats and 57.3ms gap."""
         cmd_name = None
         for name in dir(IRCommand):
             if not name.startswith('_') and getattr(IRCommand, name) == command_code:
@@ -161,10 +193,8 @@ class IRTransmitter:
 
         code = self._build_code(command_code)
 
-        for i in range(repeats):
-            self._send_packet(code)
-            if i < repeats - 1:
-                time.sleep_us(IR_PACKET_GAP_US)
+        for _ in range(repeats):
+            self._send_packet(code)  # Gap is enforced automatically
 
         print("IR TX: Test complete")
 
