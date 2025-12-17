@@ -232,12 +232,29 @@ class PollingScheduler:
         if not ir_commands:
             return
 
+        # If already moving with the same commands, don't reset anything
+        # This preserves the precise 57.3ms timing cadence
+        if self.state == MovementState.MOVING and self.current_commands == ir_commands:
+            if DEBUG_IR:
+                print("PollingScheduler: Already moving with same commands, ignoring")
+            return
+
+        # If already moving but with different commands, just update the commands
+        # without resetting timing - this allows smooth direction changes
+        if self.state == MovementState.MOVING:
+            if DEBUG_IR:
+                print(f"PollingScheduler: Updating commands while moving")
+            self.current_commands = ir_commands
+            self.diagonal_index = 0
+            self.movement_start_time = time.ticks_ms()  # Reset timeout for new direction
+            # Don't reset timing - next frame will send at the natural 57.3ms cadence
+            return
+
+        # First time starting movement - reset timing so first frame sends immediately
         if DEBUG_IR:
             print(f"PollingScheduler: Starting movement with {len(ir_commands)} commands")
 
-        # Reset transmitter timing so first frame sends immediately
         self.transmitter.reset_timing()
-
         self.current_commands = ir_commands
         self.diagonal_index = 0
         self.state = MovementState.MOVING
