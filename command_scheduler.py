@@ -213,10 +213,10 @@ class CommandScheduler:
 
 class PollingScheduler:
     """
-    Alternative scheduler using polling instead of hardware timer.
+    Simplified scheduler using polling.
 
-    This is simpler and may work better in cooperative multitasking
-    environments where timer interrupts could interfere with network handling.
+    The IR transmitter handles all timing internally (57.3ms gap),
+    so this scheduler just manages state and delegates to the transmitter.
     """
 
     def __init__(self):
@@ -224,7 +224,6 @@ class PollingScheduler:
         self.state = MovementState.IDLE
         self.current_commands = []
         self.diagonal_index = 0
-        self.last_transmit_time = 0
         self.movement_start_time = 0
         self.stop_requested = False
 
@@ -236,56 +235,68 @@ class PollingScheduler:
         if DEBUG_IR:
             print(f"PollingScheduler: Starting movement with {len(ir_commands)} commands")
 
+        # Reset transmitter timing so first frame sends immediately
+        self.transmitter.reset_timing()
+
         self.current_commands = ir_commands
         self.diagonal_index = 0
         self.state = MovementState.MOVING
         self.movement_start_time = time.ticks_ms()
         self.stop_requested = False
 
-        # Send first command immediately
-        self._transmit_next()
-
     def stop_movement(self):
         """Stop movement."""
-        if DEBUG_IR:
-            print("PollingScheduler: Stopping")
+        if self.state != MovementState.IDLE:
+            if DEBUG_IR:
+                print("PollingScheduler: Stopping")
 
-        self.stop_requested = True
-        self.current_commands = []
-        self.state = MovementState.IDLE
+            self.stop_requested = True
+            self.current_commands = []
+            self.state = MovementState.IDLE
+            self.transmitter.stop()  # Reset timing for next movement
 
     def poll(self) -> bool:
         """
         Poll the scheduler - call this frequently from the main loop.
+
+        The IR transmitter handles the 57.3ms gap timing internally,
+        so we can poll as often as we like - it will only send when ready.
 
         Returns True if a transmission occurred, False otherwise.
         """
         if self.state != MovementState.MOVING or self.stop_requested:
             return False
 
-        # Check for timeout
+        # Check for safety timeout
         elapsed_total = time.ticks_diff(time.ticks_ms(), self.movement_start_time)
         if elapsed_total > MOVEMENT_TIMEOUT_MS:
-            print("PollingScheduler: Timeout")
+            print("PollingScheduler: Timeout - stopping")
             self.stop_movement()
             return False
 
-        # Check if it's time for next transmission
-        elapsed = time.ticks_diff(time.ticks_ms(), self.last_transmit_time)
+        # Check if transmitter is ready (gap has elapsed)
+        if not self._transmitter_ready():
+            return False  # Not ready yet, return quickly to allow packet checks
 
-        # Use full cycle time (frame + gap) for repeat timing
-        if elapsed >= IR_FRAME_CYCLE_MS:
-            self._transmit_next()
-            return True
+        # Transmit next frame
+        self._transmit_next()
+        return True
 
-        return False
+    def _transmitter_ready(self) -> bool:
+        """Check if enough time has passed since last frame for the gap."""
+        if self.transmitter.last_frame_end_us == 0:
+            return True  # First frame, always ready
+
+        now = time.ticks_us()
+        elapsed = time.ticks_diff(now, self.transmitter.last_frame_end_us)
+        return elapsed >= IR_PACKET_GAP_US
 
     def _transmit_next(self):
         """Transmit next frame."""
         if not self.current_commands:
             return
 
-        # Select command
+        # Select command (alternate for diagonal movement)
         if len(self.current_commands) == 1:
             cmd = self.current_commands[0]
         else:
@@ -293,14 +304,11 @@ class PollingScheduler:
             self.diagonal_index = (self.diagonal_index + 1) % len(self.current_commands)
 
         self.transmitter.transmit_command(cmd)
-        self.last_transmit_time = time.ticks_ms()
 
     def send_single_press(self, ir_command: int, repeats: int = SINGLE_PRESS_REPEATS):
         """Send a single button press."""
-        for i in range(repeats):
-            self.transmitter.transmit_command(ir_command)
-            if i < repeats - 1:
-                time.sleep_ms(IR_FRAME_GAP_MS)
+        self.transmitter.reset_timing()  # Start immediately
+        self.transmitter.transmit_command(ir_command, repeats)
 
     def is_moving(self) -> bool:
         return self.state == MovementState.MOVING
