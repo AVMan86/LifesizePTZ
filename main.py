@@ -236,6 +236,13 @@ class VISCABridge:
         if cmd.is_stop():
             # Stop movement
             self.scheduler.stop_movement()
+        elif cmd.command_type == VISCACommandType.POWER:
+            # Power commands control relay and IR mode
+            power_on = cmd.raw_data[4] == 0x02 if len(cmd.raw_data) > 4 else True
+            if power_on:
+                self.camera_power_on()
+            else:
+                self.camera_power_off()
         else:
             # Get IR commands for this VISCA command
             ir_commands = cmd.get_ir_commands()
@@ -434,15 +441,33 @@ class VISCABridge:
         self.led.value(0)
         print("Goodbye!")
 
-    def camera_power_on(self):
-        """Turn on camera power via relay."""
+    def camera_power_on(self, send_ok_delay_sec: int = 8):
+        """
+        Turn on camera power via relay and enable IR mode.
+
+        Args:
+            send_ok_delay_sec: Seconds to wait before sending OK for IR mode.
+                              The camera needs time to boot before accepting IR.
+        """
         print("Powering on camera...")
         self.relay.value(1)
-        time.sleep(1)
+
+        if send_ok_delay_sec > 0:
+            print(f"Waiting {send_ok_delay_sec}s for camera to boot...")
+            # Blink LED while waiting
+            for i in range(send_ok_delay_sec * 2):
+                self.led.toggle()
+                time.sleep_ms(500)
+
+            # Send OK to enable IR remote mode
+            print("Sending OK to enable IR mode...")
+            self.scheduler.send_single_press(IRCommand.OK, repeats=3)
+            print("Camera ready for IR control")
 
     def camera_power_off(self):
         """Turn off camera power via relay."""
         print("Powering off camera...")
+        self.scheduler.stop_movement()
         self.relay.value(0)
 
 
