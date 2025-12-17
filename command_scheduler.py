@@ -300,13 +300,14 @@ class PollingScheduler:
         return True
 
     def _transmitter_ready(self) -> bool:
-        """Check if enough time has passed since last frame for the gap."""
-        if self.transmitter.last_frame_end_us == 0:
+        """Check if it's time to send the next frame (using absolute timing)."""
+        if self.transmitter.next_frame_time_us == 0:
             return True  # First frame, always ready
 
         now = time.ticks_us()
-        elapsed = time.ticks_diff(now, self.transmitter.last_frame_end_us)
-        return elapsed >= IR_PACKET_GAP_US
+        # Check if we've reached or passed the scheduled time
+        time_until_next = time.ticks_diff(self.transmitter.next_frame_time_us, now)
+        return time_until_next <= 0
 
     def _transmit_next(self):
         """Transmit next frame."""
