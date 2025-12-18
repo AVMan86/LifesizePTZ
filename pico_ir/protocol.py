@@ -40,10 +40,6 @@ class Cmd:
     # Single-press commands (0x20-0x2F)
     PRESS_OK = 0x20
 
-    # System commands (0x30-0x3F)
-    POWER_ON = 0x30   # Turn on relay + send OK after delay
-    POWER_OFF = 0x31  # Turn off relay
-
     # Diagnostic commands (0xF0-0xFF)
     PING = 0xFE       # Request status
     RESET = 0xFF      # Reset IR Pico state

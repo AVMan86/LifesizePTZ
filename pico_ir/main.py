@@ -6,12 +6,20 @@ It receives simple commands over UART from the VISCA Pico.
 
 No network code, no complex parsing - just IR timing perfection.
 
+Power Design:
+  The W5500's Link LED drives a BJT which controls a relay.
+  When the PTZ controller connects via Ethernet, the link LED lights up,
+  triggering the relay to power on the camera and both Picos.
+  This provides hardware-level "wake on LAN" with zero standby power.
+
 Wiring:
-- GP0 (TX) → Pico #1 GP1 (RX)
-- GP1 (RX) ← Pico #1 GP0 (TX)
-- GP15 → IR LED circuit
-- GP16 → Relay (optional, for camera power)
-- GND ↔ GND
+  - GP0 (TX) → Pico #1 GP1 (RX)
+  - GP1 (RX) ← Pico #1 GP0 (TX)
+  - GP15 → IR LED circuit
+  - GND ↔ GND
+
+Startup:
+  On boot, waits for camera to initialize then sends OK to enable IR mode.
 """
 
 import machine
@@ -33,11 +41,13 @@ from protocol import (
 # =============================================================================
 
 PIN_IR_LED = 15
-PIN_RELAY = 16
 PIN_LED = 25  # Onboard LED for status
 
 # PWM duty cycle for IR carrier (50%)
 IR_CARRIER_DUTY = 32768
+
+# Startup delay before sending OK (camera boot time)
+CAMERA_BOOT_DELAY_SEC = 8
 
 
 # =============================================================================
@@ -210,8 +220,7 @@ CMD_TO_IR = {
 }
 
 
-def handle_command(cmd: int, movement: MovementController,
-                   relay: Pin, uart: UART) -> int:
+def handle_command(cmd: int, movement: MovementController, uart: UART) -> int:
     """
     Handle a command byte from the VISCA Pico.
 
@@ -234,22 +243,6 @@ def handle_command(cmd: int, movement: MovementController,
         movement.tx.reset_timing()
         for _ in range(3):  # Send 3 times for reliability
             movement.tx.send_command(IRCode.OK)
-        return Resp.ACK
-
-    # Power on (relay + OK sequence)
-    if cmd == Cmd.POWER_ON:
-        relay.value(1)
-        # Wait for camera to boot, then send OK
-        time.sleep(8)
-        movement.tx.reset_timing()
-        for _ in range(3):
-            movement.tx.send_command(IRCode.OK)
-        return Resp.ACK
-
-    # Power off
-    if cmd == Cmd.POWER_OFF:
-        movement.stop()
-        relay.value(0)
         return Resp.ACK
 
     # Ping
@@ -277,7 +270,6 @@ def main():
 
     # Initialize hardware
     led = Pin(PIN_LED, Pin.OUT)
-    relay = Pin(PIN_RELAY, Pin.OUT, value=0)
 
     # Initialize UART for communication with VISCA Pico
     uart = UART(0, baudrate=UART_BAUD, tx=Pin(UART_TX_PIN), rx=Pin(UART_RX_PIN))
@@ -290,12 +282,19 @@ def main():
     movement = MovementController(transmitter)
 
     print(f"IR transmitter ready on GP{PIN_IR_LED}")
-    print("Waiting for commands...")
 
-    # Blink LED to show we're ready
-    for _ in range(3):
+    # Wait for camera to boot, then send OK to enable IR mode
+    print(f"Waiting {CAMERA_BOOT_DELAY_SEC}s for camera to boot...")
+    for i in range(CAMERA_BOOT_DELAY_SEC * 2):
         led.toggle()
-        time.sleep_ms(200)
+        time.sleep_ms(500)
+
+    print("Sending OK to enable IR mode...")
+    transmitter.reset_timing()
+    for _ in range(3):
+        transmitter.send_command(IRCode.OK)
+
+    print("Ready for commands!")
     led.value(1)
 
     # Main loop - keep it tight!
@@ -311,7 +310,7 @@ def main():
             cmd = uart.read(1)
             if cmd:
                 cmd_byte = cmd[0]
-                response = handle_command(cmd_byte, movement, relay, uart)
+                response = handle_command(cmd_byte, movement, uart)
                 uart.write(bytes([response]))
 
         # Blink LED slowly when idle, fast when moving

@@ -8,6 +8,12 @@ This Pico handles all network complexity:
 
 No timing-critical code here - the IR Pico handles all IR timing.
 
+Power Design:
+  The W5500's Link LED drives a BJT which controls a relay.
+  When the PTZ controller connects via Ethernet, the link LED lights up,
+  triggering the relay to power on the camera and both Picos.
+  This provides hardware-level "wake on LAN" with zero standby power.
+
 Wiring:
 - GP0 (TX) → Pico #2 GP1 (RX)
 - GP1 (RX) ← Pico #2 GP0 (TX)
@@ -79,14 +85,6 @@ class IRPicoLink:
     def press_ok(self):
         """Send OK button press."""
         self.send_command(Cmd.PRESS_OK)
-
-    def power_on(self):
-        """Power on camera (relay + OK sequence)."""
-        self.send_command(Cmd.POWER_ON)
-
-    def power_off(self):
-        """Power off camera."""
-        self.send_command(Cmd.POWER_OFF)
 
     def ping(self) -> bool:
         """Check if IR Pico is responding."""
