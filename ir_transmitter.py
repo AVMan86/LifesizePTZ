@@ -39,18 +39,12 @@ class IRTransmitter:
     for on/off timing. Simple and reliable approach.
 
     Enforces the critical 57.3ms gap between frames for smooth camera movement.
-    Uses absolute timing to compensate for processing delays - if one gap is
-    longer due to VISCA processing, the next gap will be shorter to catch up.
     """
 
     def __init__(self, pin_num=PIN_IR_LED):
         self.pin_num = pin_num
         self.pwm = None
-        # Absolute timing: when the next frame should start
-        # Using absolute time prevents delay accumulation
-        self.next_frame_time_us = 0
-        # Also track last frame end for scheduler's ready check
-        self.last_frame_end_us = 0
+        self.last_frame_end_us = 0  # Track when last frame ended
         self._init_pwm()
 
         if DEBUG_IR:
@@ -73,42 +67,31 @@ class IRTransmitter:
 
     def _wait_for_gap(self):
         """
-        Wait if needed to maintain the 57.3ms timing cadence.
-
-        Uses ABSOLUTE timing rather than relative timing. This means if one
-        gap ends up longer (due to VISCA processing), the next gap will be
-        shorter to compensate, maintaining the average 57.3ms cadence.
-
-        This is critical for smooth camera movement - the camera's acceleration
-        expects consistent timing like the original remote provides.
+        Wait if needed to maintain the 57.3ms gap between frames.
+        This ensures smooth camera movement by matching the original remote timing.
         """
-        if self.next_frame_time_us == 0:
+        if self.last_frame_end_us == 0:
             return  # First frame, no wait needed
 
         now = time.ticks_us()
-        wait_time = time.ticks_diff(self.next_frame_time_us, now)
+        elapsed = time.ticks_diff(now, self.last_frame_end_us)
 
-        if wait_time > 0:
-            # Need to wait - we're early (good!)
-            time.sleep_us(wait_time)
-        # If wait_time <= 0, we're late - send immediately, next gap compensates
+        if elapsed < IR_PACKET_GAP_US:
+            remaining = IR_PACKET_GAP_US - elapsed
+            time.sleep_us(remaining)
 
     def _send_packet(self, code: int):
         """
         Send a single IR packet with proper gap timing.
 
-        Waits for the scheduled time if needed, then sends the packet.
-        Uses absolute timing - next frame time is calculated from the
-        previous scheduled time, not from when we actually sent.
+        Waits for the 57.3ms gap if a previous frame was sent recently,
+        then sends the packet and records the end time.
 
         Args:
             code: 16-bit code (device << 8 | command)
         """
-        # Wait for scheduled time if needed
+        # Wait for gap from previous frame if needed
         self._wait_for_gap()
-
-        # Record frame start for absolute timing calculation
-        frame_start = time.ticks_us()
 
         # 1. Header pulse
         self._carrier_on()
@@ -136,19 +119,8 @@ class IRTransmitter:
         time.sleep_us(IR_STOP_MARK_US)
         self._carrier_off()
 
-        # Record when this frame ended (for scheduler's ready check)
+        # Record when this frame ended for gap timing
         self.last_frame_end_us = time.ticks_us()
-
-        # Calculate next frame time using ABSOLUTE timing
-        # If this was the first frame, base it on when we actually started
-        # Otherwise, base it on when we SHOULD have started (maintains cadence)
-        if self.next_frame_time_us == 0:
-            # First frame - schedule next based on actual start
-            self.next_frame_time_us = time.ticks_add(frame_start, IR_PACKET_GAP_US)
-        else:
-            # Subsequent frames - maintain absolute cadence
-            # Schedule next frame 57.3ms after the SCHEDULED time, not actual
-            self.next_frame_time_us = time.ticks_add(self.next_frame_time_us, IR_PACKET_GAP_US)
 
     def _build_code(self, command: int) -> int:
         """Build the 16-bit code from device code and command."""
@@ -189,13 +161,11 @@ class IRTransmitter:
     def stop(self):
         """Ensure carrier is off and reset frame timing."""
         self._carrier_off()
-        self.last_frame_end_us = 0
-        self.next_frame_time_us = 0  # Reset so next command starts immediately
+        self.last_frame_end_us = 0  # Reset so next command starts immediately
 
     def reset_timing(self):
         """Reset frame timing so next frame starts without gap delay."""
         self.last_frame_end_us = 0
-        self.next_frame_time_us = 0
 
     def deinit(self):
         """Clean up PWM resources."""
