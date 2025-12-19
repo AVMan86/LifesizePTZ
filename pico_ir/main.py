@@ -24,6 +24,8 @@ Startup:
 
 import machine
 import time
+import gc
+import micropython
 from machine import Pin, PWM, UART
 
 from protocol import (
@@ -35,6 +37,9 @@ from protocol import (
     IR_STOP_MARK_US, IR_PACKET_GAP_US,
     LIFESIZE_DEVICE_CODE,
 )
+
+# High-precision timing
+micropython.alloc_emergency_exception_buf(100)
 
 # =============================================================================
 # Pin Configuration
@@ -51,83 +56,52 @@ CAMERA_BOOT_DELAY_SEC = 8
 
 
 # =============================================================================
-# IR Transmitter
+# IR Transmitter (Gemini-style simple approach)
 # =============================================================================
 
 class IRTransmitter:
     """
-    Hardware-level IR transmitter with precise timing.
+    Hardware-level IR transmitter with simple, reliable timing.
 
-    This is the core timing-critical code. No interruptions allowed
-    during transmission - we have complete control of the CPU.
+    Uses the Gemini approach: persistent PWM, toggle duty cycle,
+    unconditional gap sleep after each frame.
     """
 
     def __init__(self):
         self.pwm = PWM(Pin(PIN_IR_LED))
         self.pwm.freq(IR_CARRIER_FREQ_HZ)
         self.pwm.duty_u16(0)
-        self.last_frame_end_us = 0
-
-    def _carrier_on(self):
-        self.pwm.duty_u16(IR_CARRIER_DUTY)
-
-    def _carrier_off(self):
-        self.pwm.duty_u16(0)
-
-    def _wait_for_gap(self):
-        """Wait for 57.3ms gap since last frame."""
-        if self.last_frame_end_us == 0:
-            return
-
-        now = time.ticks_us()
-        elapsed = time.ticks_diff(now, self.last_frame_end_us)
-
-        if elapsed < IR_PACKET_GAP_US:
-            time.sleep_us(IR_PACKET_GAP_US - elapsed)
 
     def send_frame(self, code: int):
-        """
-        Send a single IR frame with proper gap timing.
-
-        Args:
-            code: 16-bit code (device << 8 | command)
-        """
-        self._wait_for_gap()
-
+        """Send a single 16-bit IR frame."""
         # Header
-        self._carrier_on()
+        self.pwm.duty_u16(IR_CARRIER_DUTY)
         time.sleep_us(IR_HEADER_MARK_US)
-        self._carrier_off()
+        self.pwm.duty_u16(0)
         time.sleep_us(IR_HEADER_SPACE_US)
 
         # Data bits (16 bits, MSB first)
         for i in range(15, -1, -1):
             bit = (code >> i) & 1
-            self._carrier_on()
+            self.pwm.duty_u16(IR_CARRIER_DUTY)
             time.sleep_us(IR_BIT_MARK_US)
-            self._carrier_off()
+            self.pwm.duty_u16(0)
             time.sleep_us(IR_BIT_1_SPACE_US if bit else IR_BIT_0_SPACE_US)
 
         # Stop bit
-        self._carrier_on()
+        self.pwm.duty_u16(IR_CARRIER_DUTY)
         time.sleep_us(IR_STOP_MARK_US)
-        self._carrier_off()
-
-        self.last_frame_end_us = time.ticks_us()
+        self.pwm.duty_u16(0)
 
     def send_command(self, ir_code: int):
-        """Send a single IR command."""
+        """Send IR command followed by protocol gap."""
         code = (LIFESIZE_DEVICE_CODE << 8) | ir_code
         self.send_frame(code)
-
-    def reset_timing(self):
-        """Reset gap timing for immediate transmission."""
-        self.last_frame_end_us = 0
+        time.sleep_us(IR_PACKET_GAP_US)
 
     def stop(self):
         """Ensure carrier is off."""
-        self._carrier_off()
-        self.last_frame_end_us = 0
+        self.pwm.duty_u16(0)
 
 
 # =============================================================================
@@ -138,8 +112,8 @@ class MovementController:
     """
     Manages continuous IR transmission for smooth camera movement.
 
-    When movement is active, sends IR frames at precise 57.3ms intervals.
-    No network interruptions - just pure timing.
+    When movement is active, continuously sends IR frames with proper gaps.
+    For diagonal movement, alternates between the two direction codes.
     """
 
     def __init__(self, transmitter: IRTransmitter):
@@ -156,10 +130,6 @@ class MovementController:
         self.commands = ir_codes
         self.cmd_index = 0
         self.active = True
-        self.tx.reset_timing()
-
-        # Send first frame immediately
-        self._send_next()
 
     def stop(self):
         """Stop all movement."""
@@ -169,36 +139,21 @@ class MovementController:
 
     def poll(self):
         """
-        Poll for next transmission. Call this frequently!
+        Send next IR frame if movement is active.
 
-        Returns True if a frame was sent.
+        Call this in the main loop. Each call sends one frame
+        (with built-in gap timing).
         """
-        if not self.active:
+        if not self.active or not self.commands:
             return False
 
-        # Check if it's time to send
-        if self.tx.last_frame_end_us == 0:
-            return False  # Already sent, waiting for gap
-
-        now = time.ticks_us()
-        elapsed = time.ticks_diff(now, self.tx.last_frame_end_us)
-
-        if elapsed >= IR_PACKET_GAP_US:
-            self._send_next()
-            return True
-
-        return False
-
-    def _send_next(self):
-        """Send the next IR frame."""
-        if not self.commands:
-            return
-
-        # Get next command (alternate for diagonal movement)
+        # Send current command
         ir_code = self.commands[self.cmd_index]
-        self.cmd_index = (self.cmd_index + 1) % len(self.commands)
-
         self.tx.send_command(ir_code)
+
+        # Move to next command (for diagonal alternation)
+        self.cmd_index = (self.cmd_index + 1) % len(self.commands)
+        return True
 
 
 # =============================================================================
@@ -220,7 +175,7 @@ CMD_TO_IR = {
 }
 
 
-def handle_command(cmd: int, movement: MovementController, uart: UART) -> int:
+def handle_command(cmd: int, movement: MovementController) -> int:
     """
     Handle a command byte from the VISCA Pico.
 
@@ -240,7 +195,6 @@ def handle_command(cmd: int, movement: MovementController, uart: UART) -> int:
     # Single press OK
     if cmd == Cmd.PRESS_OK:
         movement.stop()
-        movement.tx.reset_timing()
         for _ in range(3):  # Send 3 times for reliability
             movement.tx.send_command(IRCode.OK)
         return Resp.ACK
@@ -268,6 +222,9 @@ def main():
     print("  Dedicated IR Transmitter")
     print("=" * 50)
 
+    # Disable automatic GC during operation
+    gc.disable()
+
     # Initialize hardware
     led = Pin(PIN_LED, Pin.OUT)
 
@@ -290,35 +247,37 @@ def main():
         time.sleep_ms(500)
 
     print("Sending OK to enable IR mode...")
-    transmitter.reset_timing()
     for _ in range(3):
         transmitter.send_command(IRCode.OK)
 
     print("Ready for commands!")
     led.value(1)
 
-    # Main loop - keep it tight!
+    # Main loop
     last_blink = time.ticks_ms()
 
     while True:
-        # Poll movement controller for IR timing
-        # This is the most important thing - must happen frequently
-        movement.poll()
+        # Send IR frames if movement is active
+        # This blocks for ~57ms per frame (includes gap)
+        if movement.poll():
+            # Frame was sent, LED on while moving
+            led.value(1)
+        else:
+            # Not moving - check for commands and do housekeeping
+            if uart.any():
+                cmd = uart.read(1)
+                if cmd:
+                    response = handle_command(cmd[0], movement)
+                    uart.write(bytes([response]))
 
-        # Check for incoming commands (non-blocking)
-        if uart.any():
-            cmd = uart.read(1)
-            if cmd:
-                cmd_byte = cmd[0]
-                response = handle_command(cmd_byte, movement, uart)
-                uart.write(bytes([response]))
+            # Run GC when idle
+            gc.collect()
 
-        # Blink LED slowly when idle, fast when moving
-        now = time.ticks_ms()
-        blink_interval = 200 if movement.active else 1000
-        if time.ticks_diff(now, last_blink) > blink_interval:
-            led.toggle()
-            last_blink = now
+            # Blink LED slowly when idle
+            now = time.ticks_ms()
+            if time.ticks_diff(now, last_blink) > 1000:
+                led.toggle()
+                last_blink = now
 
 
 if __name__ == "__main__":
