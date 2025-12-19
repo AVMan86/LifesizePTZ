@@ -24,6 +24,7 @@ The camera should move smoothly while you hold the key!
 import time
 import sys
 import select
+import gc
 from machine import Pin, PWM
 
 # =============================================================================
@@ -186,6 +187,9 @@ def main():
 
     frame_count = 0
 
+    # Disable automatic garbage collection - we'll control it manually
+    gc.disable()
+
     while True:
         char = read_char()
 
@@ -223,7 +227,7 @@ def main():
                         IRCode.ZOOM_IN: "ZOOM+", IRCode.ZOOM_OUT: "ZOOM-"
                     }
                     names = [code_names.get(c, hex(c)) for c in current_codes]
-                    print(f"Movement: {' + '.join(names)}", end="", flush=True)
+                    print(f"Movement: {' + '.join(names)}", end="")
                     frame_count = 0
 
         # Send IR codes if movement is active
@@ -241,6 +245,7 @@ def main():
                 frame_count += 1
         else:
             led.value(0)
+            gc.collect()  # Run GC only when idle (not during IR transmission)
             time.sleep_ms(10)  # Small delay when idle
 
 if __name__ == "__main__":
