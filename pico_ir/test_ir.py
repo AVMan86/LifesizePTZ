@@ -240,7 +240,10 @@ def main():
             else:
                 # Send all codes for this movement
                 led.value(1)
-                for code in current_codes:
+                for i, code in enumerate(current_codes):
+                    # For diagonal movements, ensure gap between codes
+                    if i > 0:
+                        time.sleep_us(PACKET_GAP_US)
                     tx.send_command(code)
                 frame_count += 1
         else:
