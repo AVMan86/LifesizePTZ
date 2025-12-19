@@ -123,12 +123,16 @@ class NetworkManager:
     Manages W5500 Ethernet and link status monitoring.
     """
 
+    # W5500 PHY Configuration Register address
+    W5500_PHYCFGR = 0x002E
+
     def __init__(self, relay_pin: Pin):
         self.relay = relay_pin
         self.relay.value(0)  # Start with relay off
         self.nic = None
         self.spi = None
         self.cs_pin = None
+        self.rst_pin = None
         self.link_up = False
         self.link_stable_since = 0
         self.last_status_print = 0
@@ -141,10 +145,10 @@ class NetworkManager:
             import network
 
             # Reset W5500
-            rst_pin = Pin(PIN_W5500_RST, Pin.OUT)
-            rst_pin.value(0)
+            self.rst_pin = Pin(PIN_W5500_RST, Pin.OUT)
+            self.rst_pin.value(0)
             time.sleep_ms(100)
-            rst_pin.value(1)
+            self.rst_pin.value(1)
             time.sleep_ms(500)
 
             # Configure SPI
@@ -155,16 +159,53 @@ class NetworkManager:
             self.cs_pin = Pin(PIN_SPI_CS, Pin.OUT, value=1)
 
             # Initialize W5500
-            self.nic = network.WIZNET5K(self.spi, self.cs_pin, rst_pin)
+            self.nic = network.WIZNET5K(self.spi, self.cs_pin, self.rst_pin)
             self.nic.active(True)
 
             print("W5500 hardware ready")
+
+            # Test link detection methods
+            phy_link = self.read_phy_link()
+            print(f"  PHY link (register): {phy_link}")
             print(f"  isconnected: {self.nic.isconnected()}")
             print(f"  status: {self.nic.status()}")
+
             return True
 
         except Exception as e:
             print(f"Hardware init error: {e}")
+            return False
+
+    def read_phy_link(self) -> bool:
+        """
+        Read physical link status directly from W5500 PHY register.
+
+        The PHYCFGR register (0x002E) bit 0 indicates link status:
+        - 1 = Link up (cable connected)
+        - 0 = Link down (no cable)
+        """
+        if not self.spi or not self.cs_pin:
+            return False
+
+        try:
+            # W5500 SPI frame: 2 bytes address + 1 byte control + data
+            # Control byte for common register read: 0x00
+            # (BSB=00000, RW=0 for read, OM=00 for variable length)
+            addr_hi = (self.W5500_PHYCFGR >> 8) & 0xFF
+            addr_lo = self.W5500_PHYCFGR & 0xFF
+            control = 0x00  # Common register, read mode
+
+            self.cs_pin.value(0)
+            self.spi.write(bytes([addr_hi, addr_lo, control]))
+            result = self.spi.read(1)
+            self.cs_pin.value(1)
+
+            # Bit 0 = LNK (link status)
+            link_up = bool(result[0] & 0x01)
+            return link_up
+
+        except Exception as e:
+            print(f"PHY read error: {e}")
             return False
 
     def configure_network(self) -> bool:
@@ -183,29 +224,19 @@ class NetworkManager:
 
     def check_link(self) -> bool:
         """Check if Ethernet link is up (physical cable connected)."""
-        if not self.nic:
+        if not self.spi:
             return False
 
-        # Try status() first - on W5500 this returns link state
-        # status() returns: 0=down, 1=joining, 2=no_ip, 3=connected
-        try:
-            status = self.nic.status()
-            # Link is up if status > 0 (any state except down)
-            # But for physical link, we want to check if cable is plugged
-            # status of 3 means fully connected, but we want link detect
+        # Read PHY register directly for true physical link status
+        phy_link = self.read_phy_link()
 
-            # Debug: print status periodically
-            now = time.ticks_ms()
-            if time.ticks_diff(now, self.last_status_print) > 2000:
-                print(f"Link check - status: {status}, isconnected: {self.nic.isconnected()}")
-                self.last_status_print = now
+        # Debug: print status periodically
+        now = time.ticks_ms()
+        if time.ticks_diff(now, self.last_status_print) > 2000:
+            print(f"Link check - PHY: {phy_link}")
+            self.last_status_print = now
 
-            # For W5500, status >= 2 usually means link is up
-            # status 0 = no link, 1 = connecting, 2 = got link no IP, 3 = connected
-            return status >= 2
-        except Exception as e:
-            print(f"Link check error: {e}")
-            return self.nic.isconnected()
+        return phy_link
 
     def update(self) -> str:
         """
