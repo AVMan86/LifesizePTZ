@@ -128,8 +128,10 @@ class NetworkManager:
         self.relay.value(0)  # Start with relay off
         self.nic = None
         self.spi = None
+        self.cs_pin = None
         self.link_up = False
         self.link_stable_since = 0
+        self.last_status_print = 0
 
     def init_hardware(self) -> bool:
         """Initialize W5500 hardware (SPI, reset)."""
@@ -150,13 +152,15 @@ class NetworkManager:
                           sck=Pin(PIN_SPI_SCK),
                           mosi=Pin(PIN_SPI_MOSI),
                           miso=Pin(PIN_SPI_MISO))
-            cs_pin = Pin(PIN_SPI_CS, Pin.OUT, value=1)
+            self.cs_pin = Pin(PIN_SPI_CS, Pin.OUT, value=1)
 
             # Initialize W5500
-            self.nic = network.WIZNET5K(self.spi, cs_pin, rst_pin)
+            self.nic = network.WIZNET5K(self.spi, self.cs_pin, rst_pin)
             self.nic.active(True)
 
             print("W5500 hardware ready")
+            print(f"  isconnected: {self.nic.isconnected()}")
+            print(f"  status: {self.nic.status()}")
             return True
 
         except Exception as e:
@@ -178,10 +182,30 @@ class NetworkManager:
             return False
 
     def check_link(self) -> bool:
-        """Check if Ethernet link is up."""
+        """Check if Ethernet link is up (physical cable connected)."""
         if not self.nic:
             return False
-        return self.nic.isconnected()
+
+        # Try status() first - on W5500 this returns link state
+        # status() returns: 0=down, 1=joining, 2=no_ip, 3=connected
+        try:
+            status = self.nic.status()
+            # Link is up if status > 0 (any state except down)
+            # But for physical link, we want to check if cable is plugged
+            # status of 3 means fully connected, but we want link detect
+
+            # Debug: print status periodically
+            now = time.ticks_ms()
+            if time.ticks_diff(now, self.last_status_print) > 2000:
+                print(f"Link check - status: {status}, isconnected: {self.nic.isconnected()}")
+                self.last_status_print = now
+
+            # For W5500, status >= 2 usually means link is up
+            # status 0 = no link, 1 = connecting, 2 = got link no IP, 3 = connected
+            return status >= 2
+        except Exception as e:
+            print(f"Link check error: {e}")
+            return self.nic.isconnected()
 
     def update(self) -> str:
         """
