@@ -132,7 +132,6 @@ class NetworkManager:
         self.rst_pin = None
         self.link_up = False
         self.link_stable_since = 0
-        self.last_status_print = 0
         self.network_configured = False
 
     def init_hardware(self) -> bool:
@@ -232,12 +231,6 @@ class NetworkManager:
             link = self.nic.isconnected()
         else:
             link = self.read_phy_link_raw()
-
-        # Debug: print status periodically
-        now = time.ticks_ms()
-        if time.ticks_diff(now, self.last_status_print) > 2000:
-            print(f"Link check - connected: {link}, configured: {self.network_configured}")
-            self.last_status_print = now
 
         return link
 
