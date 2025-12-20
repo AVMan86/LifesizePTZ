@@ -123,9 +123,6 @@ class NetworkManager:
     Manages W5500 Ethernet and link status monitoring.
     """
 
-    # W5500 PHY Configuration Register address
-    W5500_PHYCFGR = 0x002E
-
     def __init__(self, relay_pin: Pin):
         self.relay = relay_pin
         self.relay.value(0)  # Start with relay off
@@ -136,6 +133,7 @@ class NetworkManager:
         self.link_up = False
         self.link_stable_since = 0
         self.last_status_print = 0
+        self.network_configured = False
 
     def init_hardware(self) -> bool:
         """Initialize W5500 hardware (SPI, reset)."""
@@ -158,27 +156,20 @@ class NetworkManager:
                           miso=Pin(PIN_SPI_MISO))
             self.cs_pin = Pin(PIN_SPI_CS, Pin.OUT, value=1)
 
-            # Initialize W5500
+            # Initialize W5500 - don't activate yet
             self.nic = network.WIZNET5K(self.spi, self.cs_pin, self.rst_pin)
-            self.nic.active(True)
 
             print("W5500 hardware ready")
-
-            # Test link detection methods
-            phy_link = self.read_phy_link()
-            print(f"  PHY link (register): {phy_link}")
-            print(f"  isconnected: {self.nic.isconnected()}")
-            print(f"  status: {self.nic.status()}")
-
             return True
 
         except Exception as e:
             print(f"Hardware init error: {e}")
             return False
 
-    def read_phy_link(self) -> bool:
+    def read_phy_link_raw(self) -> bool:
         """
         Read physical link status directly from W5500 PHY register.
+        Only call when NIC is not active to avoid SPI conflicts.
 
         The PHYCFGR register (0x002E) bit 0 indicates link status:
         - 1 = Link up (cable connected)
@@ -189,10 +180,8 @@ class NetworkManager:
 
         try:
             # W5500 SPI frame: 2 bytes address + 1 byte control + data
-            # Control byte for common register read: 0x00
-            # (BSB=00000, RW=0 for read, OM=00 for variable length)
-            addr_hi = (self.W5500_PHYCFGR >> 8) & 0xFF
-            addr_lo = self.W5500_PHYCFGR & 0xFF
+            addr_hi = 0x00
+            addr_lo = 0x2E
             control = 0x00  # Common register, read mode
 
             self.cs_pin.value(0)
@@ -201,42 +190,56 @@ class NetworkManager:
             self.cs_pin.value(1)
 
             # Bit 0 = LNK (link status)
-            link_up = bool(result[0] & 0x01)
-            return link_up
+            return bool(result[0] & 0x01)
 
         except Exception as e:
             print(f"PHY read error: {e}")
             return False
 
     def configure_network(self) -> bool:
-        """Configure static IP (call after link is up)."""
+        """Configure static IP and activate NIC."""
         if not self.nic:
             return False
 
         try:
+            self.nic.active(True)
             self.nic.ifconfig((BRIDGE_IP, BRIDGE_SUBNET, BRIDGE_GATEWAY, BRIDGE_DNS))
             config = self.nic.ifconfig()
             print(f"Network configured: {config[0]}")
+            self.network_configured = True
             return True
         except Exception as e:
             print(f"Network config error: {e}")
             return False
+
+    def deactivate_network(self):
+        """Deactivate NIC to allow raw PHY reads."""
+        if self.nic:
+            try:
+                self.nic.active(False)
+            except:
+                pass
+        self.network_configured = False
 
     def check_link(self) -> bool:
         """Check if Ethernet link is up (physical cable connected)."""
         if not self.spi:
             return False
 
-        # Read PHY register directly for true physical link status
-        phy_link = self.read_phy_link()
+        # If network is configured, use isconnected()
+        # If not configured, read PHY directly
+        if self.network_configured:
+            link = self.nic.isconnected()
+        else:
+            link = self.read_phy_link_raw()
 
         # Debug: print status periodically
         now = time.ticks_ms()
         if time.ticks_diff(now, self.last_status_print) > 2000:
-            print(f"Link check - PHY: {phy_link}")
+            print(f"Link check - connected: {link}, configured: {self.network_configured}")
             self.last_status_print = now
 
-        return phy_link
+        return link
 
     def update(self) -> str:
         """
@@ -268,6 +271,8 @@ class NetworkManager:
             self.link_stable_since = 0
             print("Link lost - disabling relay")
             self.relay.value(0)
+            # Deactivate network so we can do raw PHY reads
+            self.deactivate_network()
             return 'link_down'
 
         elif not current_link:
