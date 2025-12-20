@@ -257,20 +257,20 @@ def main():
     last_blink = time.ticks_ms()
 
     while True:
+        # ALWAYS check for UART commands first (including STOP!)
+        if uart.any():
+            cmd = uart.read(1)
+            if cmd:
+                response = handle_command(cmd[0], movement)
+                uart.write(bytes([response]))
+
         # Send IR frames if movement is active
         # This blocks for ~57ms per frame (includes gap)
         if movement.poll():
             # Frame was sent, LED on while moving
             led.value(1)
         else:
-            # Not moving - check for commands and do housekeeping
-            if uart.any():
-                cmd = uart.read(1)
-                if cmd:
-                    response = handle_command(cmd[0], movement)
-                    uart.write(bytes([response]))
-
-            # Run GC when idle
+            # Not moving - do housekeeping
             gc.collect()
 
             # Blink LED slowly when idle
