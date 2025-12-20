@@ -273,20 +273,20 @@ class PTZController:
 # === GUI ===
 class PTZControllerGUI:
     """Graphical interface for PTZ control"""
-    
+
     def __init__(self, root):
         self.root = root
         self.root.title("LifeSize PTZ Controller")
-        self.root.geometry("500x800")
+        self.root.geometry("500x650")
         self.root.resizable(False, False)
-        
-        # Controller backend
-        self.controller = PTZController(BRIDGE_IP, BRIDGE_PORT)
-        
-        # Speed variables
-        self.pan_tilt_speed = IntVar(value=10)
-        self.zoom_speed = IntVar(value=5)
-        
+
+        # Controller backend (created after UI so we can use IP from entry)
+        self.controller = None
+
+        # Fixed speeds (no user control)
+        self.pan_tilt_speed = 10
+        self.zoom_speed = 5
+
         # Button press tracking
         self.pressed_buttons = set()
 
@@ -294,141 +294,104 @@ class PTZControllerGUI:
         self.continuous_timers = {}
         self.button_held = {}
 
+        # Connectivity check timer
+        self.connectivity_timer = None
+
         self._create_ui()
         self._connect()
-        
+
+        # Start periodic connectivity check (every 3 seconds)
+        self._start_connectivity_check()
+
         # Bind cleanup
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
     
     def _create_ui(self):
         """Create the user interface"""
-        
+
         # === CONNECTION STATUS ===
         status_frame = ttk.LabelFrame(self.root, text="Connection", padding=10)
         status_frame.pack(fill=X, padx=10, pady=10)
-        
-        ttk.Label(status_frame, text=f"Bridge IP: {BRIDGE_IP}:{BRIDGE_PORT}").pack()
-        
-        self.status_label = ttk.Label(status_frame, text="⚫ Disconnected", 
+
+        # Bridge IP entry
+        ip_row = ttk.Frame(status_frame)
+        ip_row.pack(fill=X, pady=2)
+        ttk.Label(ip_row, text="Bridge IP:").pack(side=LEFT, padx=5)
+        self.ip_var = StringVar(value=BRIDGE_IP)
+        self.ip_entry = ttk.Entry(ip_row, textvariable=self.ip_var, width=15)
+        self.ip_entry.pack(side=LEFT, padx=5)
+        ttk.Label(ip_row, text=f":{BRIDGE_PORT}").pack(side=LEFT)
+
+        self.status_label = ttk.Label(status_frame, text="⚫ Disconnected",
                                       foreground="red", font=("Arial", 12, "bold"))
         self.status_label.pack(pady=5)
-        
+
         # Reconnect button
-        self.reconnect_btn = ttk.Button(status_frame, text="🔄 Reconnect", 
+        self.reconnect_btn = ttk.Button(status_frame, text="Connect",
                                         command=self._reconnect)
         self.reconnect_btn.pack(pady=5)
         
-        # === MOVEMENT SPEEDS ===
-        speed_frame = ttk.LabelFrame(self.root, text="Speed Control", padding=10)
-        speed_frame.pack(fill=X, padx=10, pady=10)
-        
-        # Pan/Tilt Speed
-        ttk.Label(speed_frame, text="Pan/Tilt Speed:").grid(row=0, column=0, sticky=W, padx=5)
-        pan_tilt_scale = ttk.Scale(speed_frame, from_=1, to=24, 
-                                   variable=self.pan_tilt_speed, orient=HORIZONTAL)
-        pan_tilt_scale.grid(row=0, column=1, sticky=EW, padx=5)
-        self.pan_tilt_value = ttk.Label(speed_frame, text="10")
-        self.pan_tilt_value.grid(row=0, column=2, padx=5)
-        
-        # Zoom Speed
-        ttk.Label(speed_frame, text="Zoom Speed:").grid(row=1, column=0, sticky=W, padx=5)
-        zoom_scale = ttk.Scale(speed_frame, from_=0, to=7, 
-                              variable=self.zoom_speed, orient=HORIZONTAL)
-        zoom_scale.grid(row=1, column=1, sticky=EW, padx=5)
-        self.zoom_value = ttk.Label(speed_frame, text="5")
-        self.zoom_value.grid(row=1, column=2, padx=5)
-        
-        speed_frame.columnconfigure(1, weight=1)
-        
-        # Update labels
-        self.pan_tilt_speed.trace('w', lambda *args: 
-                                 self.pan_tilt_value.config(text=str(self.pan_tilt_speed.get())))
-        self.zoom_speed.trace('w', lambda *args: 
-                             self.zoom_value.config(text=str(self.zoom_speed.get())))
-        
-        # === PAN/TILT CONTROL ===
-        pan_tilt_frame = ttk.LabelFrame(self.root, text="Pan/Tilt Control", padding=20)
-        pan_tilt_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
-        
-        # Create directional pad layout
-        button_size = 80
-        
-        # UP button
-        self.up_btn = Button(pan_tilt_frame, text="▲\nUP", 
-                            width=10, height=3, font=("Arial", 12, "bold"))
-        self.up_btn.grid(row=0, column=1, padx=5, pady=5)
-        self.up_btn.bind('<ButtonPress-1>', lambda e: self._on_tilt_up())
-        self.up_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
-        
-        # LEFT button
-        self.left_btn = Button(pan_tilt_frame, text="◄\nLEFT", 
-                              width=10, height=3, font=("Arial", 12, "bold"))
-        self.left_btn.grid(row=1, column=0, padx=5, pady=5)
-        self.left_btn.bind('<ButtonPress-1>', lambda e: self._on_pan_left())
-        self.left_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
-        
-        # CENTER/STOP button
-        self.stop_btn = Button(pan_tilt_frame, text="⬛\nSTOP", 
-                              width=10, height=3, font=("Arial", 12, "bold"),
-                              bg="#ff4444", fg="white")
-        self.stop_btn.grid(row=1, column=1, padx=5, pady=5)
-        self.stop_btn.bind('<Button-1>', lambda e: self._on_stop_all())
-        
-        # RIGHT button
-        self.right_btn = Button(pan_tilt_frame, text="►\nRIGHT", 
-                               width=10, height=3, font=("Arial", 12, "bold"))
-        self.right_btn.grid(row=1, column=2, padx=5, pady=5)
-        self.right_btn.bind('<ButtonPress-1>', lambda e: self._on_pan_right())
-        self.right_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
-        
-        # DOWN button
-        self.down_btn = Button(pan_tilt_frame, text="▼\nDOWN",
-                              width=10, height=3, font=("Arial", 12, "bold"))
-        self.down_btn.grid(row=2, column=1, padx=5, pady=5)
-        self.down_btn.bind('<ButtonPress-1>', lambda e: self._on_tilt_down())
-        self.down_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
+        # === PTZ CONTROL ===
+        ptz_frame = ttk.LabelFrame(self.root, text="PTZ Control", padding=20)
+        ptz_frame.pack(fill=BOTH, expand=True, padx=10, pady=10)
 
-        # === OK BUTTON (for IR mode activation) ===
-        ok_frame = ttk.LabelFrame(self.root, text="Camera Control", padding=10)
-        ok_frame.pack(fill=X, padx=10, pady=10)
+        # Center the grid
+        ptz_frame.columnconfigure(0, weight=1)
+        ptz_frame.columnconfigure(4, weight=1)
 
-        self.ok_btn = Button(ok_frame, text="OK\n(Enable IR Mode)",
-                            width=20, height=2, font=("Arial", 12, "bold"),
-                            bg="#4444ff", fg="white")
-        self.ok_btn.pack(pady=5)
-        self.ok_btn.bind('<Button-1>', lambda e: self._on_ok())
-
-        ttk.Label(ok_frame, text="Press to activate camera IR remote mode\n(Hold OK for 5 seconds on camera)").pack()
-
-        # === ZOOM CONTROL ===
-        zoom_frame = ttk.LabelFrame(self.root, text="Zoom Control", padding=20)
-        zoom_frame.pack(fill=X, padx=10, pady=10)
-        
-        # ZOOM IN button
-        self.zoom_in_btn = Button(zoom_frame, text="🔍+\nZOOM IN", 
-                                 width=15, height=3, font=("Arial", 12, "bold"))
-        self.zoom_in_btn.pack(side=LEFT, padx=10)
+        # Row 0: ZOOM IN and UP
+        self.zoom_in_btn = Button(ptz_frame, text="+\nZOOM\nIN",
+                                 width=8, height=4, font=("Arial", 11, "bold"),
+                                 bg="#4488ff", fg="white")
+        self.zoom_in_btn.grid(row=0, column=1, padx=5, pady=5)
         self.zoom_in_btn.bind('<ButtonPress-1>', lambda e: self._on_zoom_in())
         self.zoom_in_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_zoom())
-        
-        # ZOOM OUT button
-        self.zoom_out_btn = Button(zoom_frame, text="🔍-\nZOOM OUT", 
-                                  width=15, height=3, font=("Arial", 12, "bold"))
-        self.zoom_out_btn.pack(side=RIGHT, padx=10)
+
+        self.up_btn = Button(ptz_frame, text="▲\nUP",
+                            width=8, height=4, font=("Arial", 12, "bold"))
+        self.up_btn.grid(row=0, column=2, padx=5, pady=5)
+        self.up_btn.bind('<ButtonPress-1>', lambda e: self._on_tilt_up())
+        self.up_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
+
+        self.zoom_out_btn = Button(ptz_frame, text="-\nZOOM\nOUT",
+                                  width=8, height=4, font=("Arial", 11, "bold"),
+                                  bg="#4488ff", fg="white")
+        self.zoom_out_btn.grid(row=0, column=3, padx=5, pady=5)
         self.zoom_out_btn.bind('<ButtonPress-1>', lambda e: self._on_zoom_out())
         self.zoom_out_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_zoom())
+
+        # Row 1: LEFT, STOP, RIGHT
+        self.left_btn = Button(ptz_frame, text="◄\nLEFT",
+                              width=8, height=4, font=("Arial", 12, "bold"))
+        self.left_btn.grid(row=1, column=1, padx=5, pady=5)
+        self.left_btn.bind('<ButtonPress-1>', lambda e: self._on_pan_left())
+        self.left_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
+
+        self.stop_btn = Button(ptz_frame, text="■\nSTOP",
+                              width=8, height=4, font=("Arial", 12, "bold"),
+                              bg="#ff4444", fg="white")
+        self.stop_btn.grid(row=1, column=2, padx=5, pady=5)
+        self.stop_btn.bind('<Button-1>', lambda e: self._on_stop_all())
+
+        self.right_btn = Button(ptz_frame, text="►\nRIGHT",
+                               width=8, height=4, font=("Arial", 12, "bold"))
+        self.right_btn.grid(row=1, column=3, padx=5, pady=5)
+        self.right_btn.bind('<ButtonPress-1>', lambda e: self._on_pan_right())
+        self.right_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
+
+        # Row 2: DOWN
+        self.down_btn = Button(ptz_frame, text="▼\nDOWN",
+                              width=8, height=4, font=("Arial", 12, "bold"))
+        self.down_btn.grid(row=2, column=2, padx=5, pady=5)
+        self.down_btn.bind('<ButtonPress-1>', lambda e: self._on_tilt_down())
+        self.down_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
         
         # === KEYBOARD SHORTCUTS ===
         shortcuts_frame = ttk.LabelFrame(self.root, text="Keyboard Shortcuts", padding=10)
         shortcuts_frame.pack(fill=X, padx=10, pady=10)
 
-        shortcuts_text = """
-        Arrow Keys: Pan/Tilt (hold for continuous movement)
-        +/-: Zoom In/Out (hold for continuous zoom)
-        O: OK Button (enable IR mode)
-        Space: Stop All Movement
-        """
-        ttk.Label(shortcuts_frame, text=shortcuts_text, justify=LEFT).pack()
+        shortcuts_text = "Arrow Keys: Pan/Tilt    +/-: Zoom    Space: Stop"
+        ttk.Label(shortcuts_frame, text=shortcuts_text, justify=CENTER).pack()
         
         # Bind keyboard
         self.root.bind('<KeyPress>', self._on_key_press)
@@ -436,25 +399,65 @@ class PTZControllerGUI:
     
     def _connect(self):
         """Connect to bridge"""
+        # Create controller with current IP
+        ip = self.ip_var.get().strip()
+        self.controller = PTZController(ip, BRIDGE_PORT)
+
         if self.controller.connect():
-            self.status_label.config(text="🟢 Connected", foreground="green")
+            self.status_label.config(text="Connected", foreground="green")
+            self.reconnect_btn.config(text="Reconnect")
         else:
-            self.status_label.config(text="🔴 Connection Failed", foreground="red")
-            messagebox.showerror("Connection Error", 
-                               f"Failed to connect to {BRIDGE_IP}:{BRIDGE_PORT}\n\n"
+            self.status_label.config(text="Connection Failed", foreground="red")
+            self.reconnect_btn.config(text="Connect")
+            messagebox.showerror("Connection Error",
+                               f"Failed to connect to {ip}:{BRIDGE_PORT}\n\n"
                                "Make sure the Pico is powered on and running.")
-    
+
     def _reconnect(self):
         """Reconnect to bridge"""
-        self.status_label.config(text="⚫ Reconnecting...", foreground="orange")
+        self.status_label.config(text="Connecting...", foreground="orange")
         self.root.update()
-        
+
         # Disconnect first if needed
-        if self.controller.connected:
+        if self.controller and self.controller.connected:
             self.controller.disconnect()
-        
+
         # Try to connect
         self._connect()
+
+    def _start_connectivity_check(self):
+        """Start periodic connectivity checking"""
+        self._check_connectivity()
+
+    def _check_connectivity(self):
+        """Check if bridge is still responding"""
+        if self.controller and self.controller.connected:
+            # Send a quick inquiry to verify connection
+            try:
+                test_cmd = VISCACommands.inquiry_block_mode()
+                self.controller.socket.settimeout(0.5)
+                self.controller.socket.sendto(test_cmd, (self.controller.bridge_ip, self.controller.bridge_port))
+                # Try to receive response (non-blocking check)
+                try:
+                    data, addr = self.controller.socket.recvfrom(128)
+                    # Got response, still connected
+                    if self.status_label.cget("text") != "Connected":
+                        self.status_label.config(text="Connected", foreground="green")
+                except socket.timeout:
+                    # No response, mark as disconnected
+                    self.status_label.config(text="No Response", foreground="orange")
+                except Exception:
+                    pass
+            except Exception:
+                self.status_label.config(text="Disconnected", foreground="red")
+                self.controller.connected = False
+        else:
+            # Not connected
+            if self.status_label.cget("text") not in ["Connection Failed", "Connecting..."]:
+                self.status_label.config(text="Disconnected", foreground="red")
+
+        # Schedule next check (every 3 seconds)
+        self.connectivity_timer = self.root.after(3000, self._check_connectivity)
     
     # === CONTINUOUS MOVEMENT METHODS ===
     def _start_continuous_movement(self, direction, command_func):
@@ -494,22 +497,22 @@ class PTZControllerGUI:
     def _on_pan_left(self):
         self.left_btn.config(bg="#90EE90")
         self._start_continuous_movement('left',
-            lambda: self.controller.pan_left(self.pan_tilt_speed.get()))
+            lambda: self.controller.pan_left(self.pan_tilt_speed))
 
     def _on_pan_right(self):
         self.right_btn.config(bg="#90EE90")
         self._start_continuous_movement('right',
-            lambda: self.controller.pan_right(self.pan_tilt_speed.get()))
+            lambda: self.controller.pan_right(self.pan_tilt_speed))
 
     def _on_tilt_up(self):
         self.up_btn.config(bg="#90EE90")
         self._start_continuous_movement('up',
-            lambda: self.controller.tilt_up(self.pan_tilt_speed.get()))
+            lambda: self.controller.tilt_up(self.pan_tilt_speed))
 
     def _on_tilt_down(self):
         self.down_btn.config(bg="#90EE90")
         self._start_continuous_movement('down',
-            lambda: self.controller.tilt_down(self.pan_tilt_speed.get()))
+            lambda: self.controller.tilt_down(self.pan_tilt_speed))
 
     def _on_stop_pan_tilt(self):
         # Stop all pan/tilt continuous movements
@@ -526,12 +529,12 @@ class PTZControllerGUI:
     def _on_zoom_in(self):
         self.zoom_in_btn.config(bg="#90EE90")
         self._start_continuous_movement('zoom_in',
-            lambda: self.controller.zoom_in(self.zoom_speed.get()))
+            lambda: self.controller.zoom_in(self.zoom_speed))
 
     def _on_zoom_out(self):
         self.zoom_out_btn.config(bg="#90EE90")
         self._start_continuous_movement('zoom_out',
-            lambda: self.controller.zoom_out(self.zoom_speed.get()))
+            lambda: self.controller.zoom_out(self.zoom_speed))
 
     def _on_stop_zoom(self):
         # Stop zoom continuous movements
@@ -540,15 +543,8 @@ class PTZControllerGUI:
                 self._stop_continuous_movement(direction, lambda: None)
 
         self.controller.stop_zoom()
-        self.zoom_in_btn.config(bg="SystemButtonFace")
-        self.zoom_out_btn.config(bg="SystemButtonFace")
-
-    def _on_ok(self):
-        """Send OK button command"""
-        self.controller.send_ok()
-        # Flash button
-        self.ok_btn.config(bg="#6666ff")
-        self.root.after(200, lambda: self.ok_btn.config(bg="#4444ff"))
+        self.zoom_in_btn.config(bg="#4488ff")
+        self.zoom_out_btn.config(bg="#4488ff")
 
     def _on_stop_all(self):
         self.controller.stop_all()
@@ -576,8 +572,6 @@ class PTZControllerGUI:
             self._on_zoom_in()
         elif key == 'minus':
             self._on_zoom_out()
-        elif key == 'o' or key == 'O':
-            self._on_ok()
         elif key == 'space':
             self._on_stop_all()
     
@@ -596,6 +590,10 @@ class PTZControllerGUI:
     
     def _on_close(self):
         """Clean shutdown"""
+        # Cancel connectivity check timer
+        if self.connectivity_timer:
+            self.root.after_cancel(self.connectivity_timer)
+
         # Stop all continuous movements
         for timer in self.continuous_timers.values():
             self.root.after_cancel(timer)
@@ -603,8 +601,9 @@ class PTZControllerGUI:
         self.button_held.clear()
 
         # Stop all camera movement
-        self.controller.stop_all()
-        self.controller.disconnect()
+        if self.controller:
+            self.controller.stop_all()
+            self.controller.disconnect()
         self.root.destroy()
 
 # === MAIN ===
@@ -614,11 +613,11 @@ def main():
     print("LifeSize PTZ Controller")
     print("VISCA over IP Command Sender")
     print("=" * 50)
-    print(f"Bridge IP: {BRIDGE_IP}:{BRIDGE_PORT}")
+    print(f"Default Bridge IP: {BRIDGE_IP}:{BRIDGE_PORT}")
     print(f"Local Port: {LOCAL_PORT}")
     print("=" * 50)
     print()
-    
+
     root = Tk()
     app = PTZControllerGUI(root)
     root.mainloop()
@@ -630,56 +629,32 @@ if __name__ == "__main__":
 === USAGE INSTRUCTIONS ===
 
 1. Make sure your LifeSize IR bridge is running on the Raspberry Pi Pico 2W
-2. Update BRIDGE_IP if needed (default: 192.168.5.177)
-3. Run this program:
+2. Run this program:
    python3 ptz_controller.py
 
-4. The program will test the connection by sending an inquiry command
-   - 🟢 Green = Bridge is responding
-   - 🔴 Red = No response from bridge
-   - Use the "🔄 Reconnect" button to retry connection
+3. Enter the Bridge IP address in the text field (default: 192.168.5.177)
+4. Click "Connect" to establish connection
+   - Green = Bridge is responding
+   - Orange = No response (check connection)
+   - Red = Disconnected
 
-5. Use the GUI buttons or keyboard shortcuts to control the camera:
-   - Click and hold directional buttons for pan/tilt
-   - Click and hold zoom buttons for zoom control
-   - Press STOP to immediately halt all movement
-   - Use arrow keys for keyboard control
-   - Use +/- for zoom
-   - Press Space to stop all
+5. Connectivity is checked automatically every 3 seconds
+   - Status updates in real-time when bridge becomes unreachable
 
-6. Watch the console for command/response logging
-
-=== TESTING CHECKLIST ===
-
-â˜ Connection Test - Should show "Connected" only if bridge responds
-â˜ Pan Left - Should see IR LED flash on bridge
-â˜ Pan Right - Should see IR LED flash on bridge  
-â˜ Tilt Up - Should trigger UP_ARROW sequences
-â˜ Tilt Down - Should trigger DOWN_ARROW sequences
-â˜ Zoom In - Should send zoom commands
-â˜ Zoom Out - Should send zoom commands
-â˜ Stop - Should halt all movement
-â˜ Speed adjustment - Higher speeds should send different values
-â˜ Continuous movement - Hold button for smooth operation
-â˜ Response logging - Check for ACK and COMPLETION messages
-â˜ Reconnection - Unplug Pico, plug back in, hit Reconnect
+6. Use the GUI buttons or keyboard shortcuts:
+   - Arrow keys or direction buttons: Pan/Tilt
+   - +/- keys or zoom buttons: Zoom In/Out
+   - Space or STOP button: Stop all movement
 
 === TROUBLESHOOTING ===
 
 If the controller shows "Connection Failed":
 - Check that the Pico is powered on and running
-- Verify the IP address matches (192.168.5.177)
+- Verify the IP address is correct
 - Check your network connection
-- Try pinging the Pico: ping 192.168.5.177
+- Try pinging the Pico
 - Check if ethernet link is up on the Pico (W5500 status)
-- Use "🔄 Reconnect" button after fixing issues
-
-If commands don't work after connecting:
-- Check console output for sent commands
-- Look for response messages from bridge
-- Verify ethernet link is up on the Pico
-- Check that camera is powered on (relay status)
-- Try the Reconnect button
+- Click "Reconnect" after fixing issues
 
 === NETWORK TRAFFIC ===
 
@@ -690,8 +665,4 @@ You can monitor the VISCA commands with Wireshark:
 
 Expected packet format:
 81 01 06 01 [pan_speed] [tilt_speed] [pan_dir] [tilt_dir] FF
-
-Connection test packet:
-81 09 04 39 FF (inquiry block mode)
-Expected response: 90 50 00 00 00 00 FF
 """
