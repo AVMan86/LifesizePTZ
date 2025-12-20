@@ -300,7 +300,7 @@ class PTZControllerGUI:
         self._create_ui()
         self._connect()
 
-        # Start periodic connectivity check (every 3 seconds)
+        # Start periodic connectivity check
         self._start_connectivity_check()
 
         # Bind cleanup
@@ -651,8 +651,8 @@ if __name__ == "__main__":
    - Orange = No response (check connection)
    - Red = Disconnected
 
-5. Connectivity is checked automatically every 3 seconds
-   - Status updates in real-time when bridge becomes unreachable
+5. Connectivity is checked automatically every 30 seconds
+   - Status updates when bridge becomes unreachable
 
 6. Use the GUI buttons or keyboard shortcuts:
    - Arrow keys or direction buttons: Pan/Tilt
