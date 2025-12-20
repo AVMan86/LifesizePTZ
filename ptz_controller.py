@@ -439,34 +439,29 @@ class PTZControllerGUI:
         self._check_connectivity()
 
     def _check_connectivity(self):
-        """Check if bridge is still responding"""
+        """Check if bridge is still responding (only when connected)"""
         if self.controller and self.controller.connected:
             # Send a quick inquiry to verify connection
             try:
                 test_cmd = VISCACommands.inquiry_block_mode()
                 self.controller.socket.settimeout(0.5)
                 self.controller.socket.sendto(test_cmd, (self.controller.bridge_ip, self.controller.bridge_port))
-                # Try to receive response (non-blocking check)
                 try:
                     data, addr = self.controller.socket.recvfrom(128)
                     # Got response, still connected
                     if self.status_label.cget("text") != "Connected":
                         self.status_label.config(text="Connected", foreground="green")
                 except socket.timeout:
-                    # No response, mark as disconnected
+                    # No response, mark as warning
                     self.status_label.config(text="No Response", foreground="orange")
                 except Exception:
                     pass
             except Exception:
                 self.status_label.config(text="Disconnected", foreground="red")
                 self.controller.connected = False
-        else:
-            # Not connected
-            if self.status_label.cget("text") not in ["Connection Failed", "Connecting..."]:
-                self.status_label.config(text="Disconnected", foreground="red")
 
-        # Schedule next check (every 3 seconds)
-        self.connectivity_timer = self.root.after(3000, self._check_connectivity)
+        # Schedule next check (every 30 seconds, only matters when connected)
+        self.connectivity_timer = self.root.after(30000, self._check_connectivity)
     
     # === CONTINUOUS MOVEMENT METHODS ===
     def _start_continuous_movement(self, direction, command_func):
