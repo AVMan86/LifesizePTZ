@@ -277,7 +277,7 @@ class PTZControllerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("LifeSize PTZ Controller")
-        self.root.geometry("500x650")
+        self.root.geometry("500x680")
         self.root.resizable(False, False)
 
         # Controller backend (created after UI so we can use IP from entry)
@@ -385,12 +385,21 @@ class PTZControllerGUI:
         self.down_btn.grid(row=2, column=2, padx=5, pady=5)
         self.down_btn.bind('<ButtonPress-1>', lambda e: self._on_tilt_down())
         self.down_btn.bind('<ButtonRelease-1>', lambda e: self._on_stop_pan_tilt())
-        
+
+        # === OK BUTTON (for IR mode activation) ===
+        ok_frame = ttk.Frame(self.root)
+        ok_frame.pack(fill=X, padx=10, pady=5)
+        self.ok_btn = Button(ok_frame, text="OK (Enable IR Mode)",
+                            width=25, height=1, font=("Arial", 10, "bold"),
+                            bg="#4444ff", fg="white")
+        self.ok_btn.pack()
+        self.ok_btn.bind('<Button-1>', lambda e: self._on_ok())
+
         # === KEYBOARD SHORTCUTS ===
         shortcuts_frame = ttk.LabelFrame(self.root, text="Keyboard Shortcuts", padding=10)
         shortcuts_frame.pack(fill=X, padx=10, pady=10)
 
-        shortcuts_text = "Arrow Keys: Pan/Tilt    +/-: Zoom    Space: Stop"
+        shortcuts_text = "Arrow Keys: Pan/Tilt    +/-: Zoom    O: OK    Space: Stop"
         ttk.Label(shortcuts_frame, text=shortcuts_text, justify=CENTER).pack()
         
         # Bind keyboard
@@ -546,6 +555,13 @@ class PTZControllerGUI:
         self.zoom_in_btn.config(bg="#4488ff")
         self.zoom_out_btn.config(bg="#4488ff")
 
+    def _on_ok(self):
+        """Send OK button command"""
+        self.controller.send_ok()
+        # Flash button
+        self.ok_btn.config(bg="#6666ff")
+        self.root.after(200, lambda: self.ok_btn.config(bg="#4444ff"))
+
     def _on_stop_all(self):
         self.controller.stop_all()
         self._on_stop_pan_tilt()
@@ -572,6 +588,8 @@ class PTZControllerGUI:
             self._on_zoom_in()
         elif key == 'minus':
             self._on_zoom_out()
+        elif key == 'o' or key == 'O':
+            self._on_ok()
         elif key == 'space':
             self._on_stop_all()
     
