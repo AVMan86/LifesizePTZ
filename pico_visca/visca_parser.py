@@ -13,15 +13,18 @@ DEBUG_VISCA = True
 # Pan-Tilt direction mapping to serial commands
 # Key: (pan_direction, tilt_direction) from VISCA
 # Value: Cmd.START_* constant or None for stop
+#
+# NOTE: Left/Right are REVERSED for "audience perspective"
+# (viewer sees image move in the direction they press)
 VISCA_PANTILT_MAP = {
     (0x03, 0x01): Cmd.START_UP,         # Tilt up
     (0x03, 0x02): Cmd.START_DOWN,       # Tilt down
-    (0x01, 0x03): Cmd.START_LEFT,       # Pan left
-    (0x02, 0x03): Cmd.START_RIGHT,      # Pan right
-    (0x01, 0x01): Cmd.START_UP_LEFT,    # Diagonal up-left
-    (0x02, 0x01): Cmd.START_UP_RIGHT,   # Diagonal up-right
-    (0x01, 0x02): Cmd.START_DOWN_LEFT,  # Diagonal down-left
-    (0x02, 0x02): Cmd.START_DOWN_RIGHT, # Diagonal down-right
+    (0x01, 0x03): Cmd.START_RIGHT,      # Pan left (VISCA) → move RIGHT (reversed)
+    (0x02, 0x03): Cmd.START_LEFT,       # Pan right (VISCA) → move LEFT (reversed)
+    (0x01, 0x01): Cmd.START_UP_RIGHT,   # Up-left (VISCA) → UP-RIGHT (reversed)
+    (0x02, 0x01): Cmd.START_UP_LEFT,    # Up-right (VISCA) → UP-LEFT (reversed)
+    (0x01, 0x02): Cmd.START_DOWN_RIGHT, # Down-left (VISCA) → DOWN-RIGHT (reversed)
+    (0x02, 0x02): Cmd.START_DOWN_LEFT,  # Down-right (VISCA) → DOWN-LEFT (reversed)
     (0x03, 0x03): None,                 # Stop
 }
 
