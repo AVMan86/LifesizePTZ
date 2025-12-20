@@ -11,9 +11,9 @@ This Pico handles:
 # Network Configuration
 # =============================================================================
 
-BRIDGE_IP = "192.168.1.199"
+BRIDGE_IP = "192.168.5.177"
 BRIDGE_SUBNET = "255.255.255.0"
-BRIDGE_GATEWAY = "192.168.1.1"
+BRIDGE_GATEWAY = "192.168.5.1"
 BRIDGE_DNS = "8.8.8.8"
 VISCA_PORT = 52381
 
