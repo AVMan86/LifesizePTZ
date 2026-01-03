@@ -161,9 +161,23 @@ class NetworkManager:
             version = self.read_w5500_version()
             if version == 0x04:
                 print(f"W5500 detected (version: 0x{version:02X})")
-            elif version == 0x00 or version == 0xFF:
-                print(f"WARNING: W5500 not responding (got 0x{version:02X})")
-                print("Check SPI wiring: SCK=GP2, MOSI=GP3, MISO=GP4, CS=GP5, RST=GP6")
+            elif version == 0x00:
+                print(f"ERROR: W5500 not responding (got 0x{version:02X})")
+                print("")
+                print("All SPI reads return 0x00 - possible causes:")
+                print("  1. MISO (GP4) not connected or loose")
+                print("  2. MOSI/MISO swapped (try swapping GP3 and GP4)")
+                print("  3. Wrong pins on W5500 module")
+                print("")
+                print("Expected wiring:")
+                print("  Pico GP2 → W5500 SCK/SCLK")
+                print("  Pico GP3 → W5500 MOSI/SI")
+                print("  Pico GP4 → W5500 MISO/SO  <-- CHECK THIS ONE")
+                print("  Pico GP5 → W5500 CS/SCS")
+                print("  Pico GP6 → W5500 RST/RESET")
+            elif version == 0xFF:
+                print(f"ERROR: W5500 not responding (got 0x{version:02X})")
+                print("All SPI reads return 0xFF - MISO might be floating/disconnected")
             else:
                 print(f"WARNING: Unexpected chip version: 0x{version:02X}")
 
