@@ -133,6 +133,7 @@ class NetworkManager:
         self.link_up = False
         self.link_stable_since = 0
         self.network_configured = False
+        self.last_phy_value = None  # Track last PHY register value for debug
 
     def init_hardware(self) -> bool:
         """Initialize W5500 hardware (SPI, reset)."""
@@ -155,6 +156,17 @@ class NetworkManager:
                           miso=Pin(PIN_SPI_MISO))
             self.cs_pin = Pin(PIN_SPI_CS, Pin.OUT, value=1)
 
+            # Verify SPI communication by reading W5500 version register
+            print("Testing SPI communication...")
+            version = self.read_w5500_version()
+            if version == 0x04:
+                print(f"W5500 detected (version: 0x{version:02X})")
+            elif version == 0x00 or version == 0xFF:
+                print(f"WARNING: W5500 not responding (got 0x{version:02X})")
+                print("Check SPI wiring: SCK=GP2, MOSI=GP3, MISO=GP4, CS=GP5, RST=GP6")
+            else:
+                print(f"WARNING: Unexpected chip version: 0x{version:02X}")
+
             # Initialize W5500 - don't activate yet
             self.nic = network.WIZNET5K(self.spi, self.cs_pin, self.rst_pin)
 
@@ -164,6 +176,26 @@ class NetworkManager:
         except Exception as e:
             print(f"Hardware init error: {e}")
             return False
+
+    def read_w5500_version(self) -> int:
+        """Read W5500 version register (should return 0x04)."""
+        if not self.spi or not self.cs_pin:
+            return 0xFF
+
+        try:
+            # VERSIONR at address 0x0039 in common register space
+            addr_hi = 0x00
+            addr_lo = 0x39
+            control = 0x00  # Common register, read mode
+
+            self.cs_pin.value(0)
+            self.spi.write(bytes([addr_hi, addr_lo, control]))
+            result = self.spi.read(1)
+            self.cs_pin.value(1)
+
+            return result[0]
+        except:
+            return 0xFF
 
     def read_phy_link_raw(self) -> bool:
         """
@@ -175,6 +207,7 @@ class NetworkManager:
         - 0 = Link down (no cable)
         """
         if not self.spi or not self.cs_pin:
+            print("PHY read: SPI or CS not initialized")
             return False
 
         try:
@@ -187,6 +220,11 @@ class NetworkManager:
             self.spi.write(bytes([addr_hi, addr_lo, control]))
             result = self.spi.read(1)
             self.cs_pin.value(1)
+
+            # Debug: Print only when value changes
+            if result[0] != self.last_phy_value:
+                print(f"PHYCFGR = 0x{result[0]:02X}, Link bit = {result[0] & 0x01}")
+                self.last_phy_value = result[0]
 
             # Bit 0 = LNK (link status)
             return bool(result[0] & 0x01)
