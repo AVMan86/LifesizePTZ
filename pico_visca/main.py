@@ -102,18 +102,32 @@ class IRPicoLink:
     def ping(self) -> bool:
         """Check if IR Pico is responding."""
         # Clear any stale data
+        stale_count = 0
         while self.uart.any():
             self.uart.read()
+            stale_count += 1
+
+        if DEBUG_UART and stale_count > 0:
+            print(f"Cleared {stale_count} stale UART bytes")
+
+        if DEBUG_UART:
+            print("Sending PING (0xFE)...")
 
         self.uart.write(bytes([Cmd.PING]))
         start = time.ticks_ms()
-        while time.ticks_diff(time.ticks_ms(), start) < 100:
+        while time.ticks_diff(time.ticks_ms(), start) < 200:  # Increased timeout
             if self.uart.any():
                 resp = self.uart.read(1)
-                if resp and resp[0] == Resp.PONG:
-                    self.connected = True
-                    return True
+                if resp:
+                    if DEBUG_UART:
+                        print(f"Got response: 0x{resp[0]:02X} (expected PONG=0xFE)")
+                    if resp[0] == Resp.PONG:
+                        self.connected = True
+                        return True
             time.sleep_ms(1)
+
+        if DEBUG_UART:
+            print("No response to PING")
         self.connected = False
         return False
 
@@ -349,6 +363,10 @@ class VISCABridge:
         # Track movement state to avoid redundant commands
         self.current_movement = None
 
+        # Track IR Pico retry attempts
+        self.last_ir_ping = 0
+        self.ir_ping_interval = 3000  # Retry every 3 seconds
+
     def init_socket(self) -> bool:
         """Initialize UDP socket."""
         try:
@@ -522,6 +540,15 @@ class VISCABridge:
 
                 # Process VISCA if network is ready
                 if self.network_ready and self.socket:
+                    # Retry IR Pico connection periodically if not connected
+                    now = time.ticks_ms()
+                    if not self.ir_link.connected:
+                        if time.ticks_diff(now, self.last_ir_ping) >= self.ir_ping_interval:
+                            print("Retrying IR Pico connection...")
+                            if self.ir_link.ping():
+                                print("IR Pico: Connected!")
+                            self.last_ir_ping = now
+
                     try:
                         data, addr = self.socket.recvfrom(256)
                         if data:

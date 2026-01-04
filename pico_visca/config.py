@@ -38,4 +38,4 @@ PIN_LED = 25  # Onboard LED
 # =============================================================================
 
 DEBUG_VISCA = True
-DEBUG_UART = False
+DEBUG_UART = True  # Temporarily enabled for troubleshooting
