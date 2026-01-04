@@ -41,6 +41,9 @@ from protocol import (
 # High-precision timing
 micropython.alloc_emergency_exception_buf(100)
 
+# Debug flag
+DEBUG_UART = True  # Show all UART communication
+
 # =============================================================================
 # Pin Configuration
 # =============================================================================
@@ -174,6 +177,31 @@ CMD_TO_IR = {
     Cmd.START_DOWN_RIGHT: [IRCode.DOWN, IRCode.RIGHT],
 }
 
+# Command names for debugging
+CMD_NAMES = {
+    Cmd.START_UP: "UP",
+    Cmd.START_DOWN: "DOWN",
+    Cmd.START_LEFT: "LEFT",
+    Cmd.START_RIGHT: "RIGHT",
+    Cmd.START_ZOOM_IN: "ZOOM_IN",
+    Cmd.START_ZOOM_OUT: "ZOOM_OUT",
+    Cmd.START_UP_LEFT: "UP_LEFT",
+    Cmd.START_UP_RIGHT: "UP_RIGHT",
+    Cmd.START_DOWN_LEFT: "DOWN_LEFT",
+    Cmd.START_DOWN_RIGHT: "DOWN_RIGHT",
+    Cmd.STOP: "STOP",
+    Cmd.PRESS_OK: "OK",
+    Cmd.PING: "PING",
+    Cmd.RESET: "RESET",
+}
+
+# Response names for debugging
+RESP_NAMES = {
+    Resp.ACK: "ACK",
+    Resp.PONG: "PONG",
+    Resp.ERROR: "ERROR",
+}
+
 
 def handle_command(cmd: int, movement: MovementController) -> int:
     """
@@ -240,17 +268,38 @@ def main():
 
     print(f"IR transmitter ready on GP{PIN_IR_LED}")
 
+    # Clear any stale UART data from power-on
+    stale_count = 0
+    while uart.any():
+        uart.read()
+        stale_count += 1
+    if stale_count > 0:
+        print(f"Cleared {stale_count} stale UART bytes from buffer")
+
     # Wait for camera to boot, then send OK to enable IR mode
     print(f"Waiting {CAMERA_BOOT_DELAY_SEC}s for camera to boot...")
+    print("(IR Pico will respond to PING during this time)")
     for i in range(CAMERA_BOOT_DELAY_SEC * 2):
         led.toggle()
         time.sleep_ms(500)
+
+        # Check for UART commands even during boot wait (respond to PING)
+        if uart.any():
+            cmd = uart.read(1)
+            if cmd:
+                response = handle_command(cmd[0], movement)
+                uart.write(bytes([response]))
+                if DEBUG_UART:
+                    cmd_name = CMD_NAMES.get(cmd[0], f"0x{cmd[0]:02X}")
+                    resp_name = RESP_NAMES.get(response, f"0x{response:02X}")
+                    print(f"[BOOT] RX: {cmd_name} -> TX: {resp_name}")
 
     print("Sending OK to enable IR mode...")
     for _ in range(3):
         transmitter.send_command(IRCode.OK)
 
     print("Ready for commands!")
+    print("=" * 50)
     led.value(1)
 
     # Main loop
@@ -263,6 +312,12 @@ def main():
             if cmd:
                 response = handle_command(cmd[0], movement)
                 uart.write(bytes([response]))
+
+                # Debug output
+                if DEBUG_UART:
+                    cmd_name = CMD_NAMES.get(cmd[0], f"0x{cmd[0]:02X}")
+                    resp_name = RESP_NAMES.get(response, f"0x{response:02X}")
+                    print(f"RX: {cmd_name} (0x{cmd[0]:02X}) -> TX: {resp_name} (0x{response:02X})")
 
         # Send IR frames if movement is active
         # This blocks for ~57ms per frame (includes gap)
